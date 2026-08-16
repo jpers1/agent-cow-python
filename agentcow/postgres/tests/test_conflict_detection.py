@@ -6,7 +6,6 @@ import asyncio
 import uuid
 
 import asyncpg
-import psycopg
 import pytest
 
 from agentcow.postgres import (
@@ -27,7 +26,8 @@ from conftest import (
     PG_PASSWORD,
     PG_PORT,
     PG_USER,
-    PsycopgExecutor,
+    AsyncpgExecutor as _AsyncpgTestExecutor,
+    connect_test_database,
 )
 from test_role_hardening import _assert_insufficient, _hardened_environment
 
@@ -55,7 +55,7 @@ async def _assert_conflicting_commit(
     table_name: str = "users",
     schema: str = "public",
 ) -> None:
-    with pytest.raises(psycopg.errors.SerializationFailure):
+    with pytest.raises(asyncpg.SerializationError):
         await commit_cow_session(
             executor,
             table_name,
@@ -448,7 +448,7 @@ async def test_selective_commit_rejects_external_conflict_and_non_prefix(
     )
     seeded_executor.commit()
 
-    with pytest.raises(psycopg.errors.InvalidParameterValue, match="causal prefix"):
+    with pytest.raises(asyncpg.InvalidParameterValueError, match="causal prefix"):
         await commit_cow_operations(seeded_executor, "users", session_id, [second])
     seeded_executor._conn.rollback()
 
@@ -456,7 +456,7 @@ async def test_selective_commit_rejects_external_conflict_and_non_prefix(
         "UPDATE users_base SET name = 'External' WHERE id = 1"
     )
     seeded_executor.commit()
-    with pytest.raises(psycopg.errors.SerializationFailure):
+    with pytest.raises(asyncpg.SerializationError):
         await commit_cow_operations(seeded_executor, "users", session_id, [first])
     seeded_executor._conn.rollback()
     assert await seeded_executor.execute(
@@ -494,7 +494,7 @@ async def test_cross_table_conflict_is_reported_and_transaction_can_roll_back(
     ]
     seeded_executor._conn.rollback()
 
-    with pytest.raises(psycopg.errors.SerializationFailure):
+    with pytest.raises(asyncpg.SerializationError):
         await commit_cow_session_schema(seeded_executor, session_id)
     seeded_executor._conn.rollback()
     assert await seeded_executor.execute(
@@ -627,7 +627,7 @@ async def test_hardened_reviewer_can_inspect_but_runtime_cannot(postgresql):
     """H03 controls expose conflicts without exposing their backing columns."""
     async with _hardened_environment(postgresql) as env:
         session_id = uuid.uuid4()
-        runtime_executor = PsycopgExecutor(env.runtime)
+        runtime_executor = _AsyncpgTestExecutor(env.runtime)
         with env.runtime.transaction():
             await _record(
                 runtime_executor,
@@ -659,7 +659,7 @@ async def test_hardened_reviewer_can_inspect_but_runtime_cannot(postgresql):
             f"'{env.schema}', 'items_base', ARRAY['id'], "
             f"'{session_id}'::uuid, NULL::uuid[], NULL::boolean)",
         )
-        with pytest.raises(psycopg.errors.SerializationFailure):
+        with pytest.raises(asyncpg.SerializationError):
             await commit_cow_session(
                 env.reviewer_executor,
                 "items",
@@ -724,7 +724,7 @@ async def test_asyncpg_executor_can_deploy_h06_functions(postgresql):
 @pytest.mark.asyncio
 async def test_atomic_commit_waits_for_inflight_canonical_writer(postgresql):
     """Validation and mutation share a lock boundary with canonical DML."""
-    executor = PsycopgExecutor(postgresql)
+    executor = _AsyncpgTestExecutor(postgresql)
     await deploy_cow_functions(executor)
     await executor.execute(
         "CREATE TABLE race_items (id integer PRIMARY KEY, value text NOT NULL)"
@@ -741,51 +741,49 @@ async def test_atomic_commit_waits_for_inflight_canonical_writer(postgresql):
     executor.commit()
 
     database = postgresql.info.dbname
-    canonical = psycopg.connect(
-        host=PG_HOST,
-        port=PG_PORT,
-        user=PG_USER,
-        password=PG_PASSWORD,
-        dbname=database,
+    canonical = connect_test_database(
+        database,
         application_name="h06-canonical-writer",
     )
     canonical.execute("UPDATE race_items_base SET value = 'canonical' WHERE id = 1")
 
-    def promote() -> str | None:
-        with psycopg.connect(
+    async def promote() -> str | None:
+        reviewer = await asyncpg.connect(
             host=PG_HOST,
             port=PG_PORT,
             user=PG_USER,
             password=PG_PASSWORD,
-            dbname=database,
-            application_name="h06-reviewer",
-        ) as reviewer:
+            database=database,
+            server_settings={"application_name": "h06-reviewer"},
+        )
+        try:
             try:
-                reviewer.execute(
+                await reviewer.execute(
                     "SELECT agentcow.commit_cow("
                     "'public', 'race_items_base', ARRAY['id'], "
                     f"'{session_id}'::uuid, NULL::uuid[], 'error')"
                 )
-            except psycopg.Error as exc:
+            except asyncpg.PostgresError as exc:
                 return exc.sqlstate
-        return None
+            return None
+        finally:
+            await reviewer.close()
 
-    promotion = asyncio.create_task(asyncio.to_thread(promote))
-    observer = psycopg.connect(
+    promotion = asyncio.create_task(promote())
+    observer = await asyncpg.connect(
         host=PG_HOST,
         port=PG_PORT,
         user=PG_USER,
         password=PG_PASSWORD,
-        dbname=database,
-        autocommit=True,
+        database=database,
     )
     try:
         for _ in range(200):
-            waiting = observer.execute(
+            waiting = await observer.fetchrow(
                 "SELECT wait_event_type = 'Lock' FROM pg_stat_activity "
                 "WHERE application_name = 'h06-reviewer'"
-            ).fetchone()
-            if waiting == (True,):
+            )
+            if waiting is not None and waiting[0] is True:
                 break
             await asyncio.sleep(0.01)
         else:
@@ -795,7 +793,7 @@ async def test_atomic_commit_waits_for_inflight_canonical_writer(postgresql):
         assert await promotion == "40001"
     finally:
         canonical.close()
-        observer.close()
+        await observer.close()
 
     assert postgresql.execute(
         "SELECT value FROM race_items_base WHERE id = 1"

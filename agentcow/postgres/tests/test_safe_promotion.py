@@ -804,9 +804,9 @@ async def test_same_session_runtime_write_waits_until_promotion_finishes(postgre
             for _ in range(100):
                 locked = env.setup.execute(
                     "SELECT EXISTS (SELECT 1 FROM pg_locks "
-                    "WHERE pid = %s AND locktype = 'advisory' "
+                    "WHERE pid = $1 AND locktype = 'advisory' "
                     "AND mode = 'ExclusiveLock' AND granted)",
-                    (pid,),
+                    pid,
                 ).fetchone()
                 if locked == (True,):
                     break

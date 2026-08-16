@@ -156,9 +156,17 @@ recommended request integration.
 ```bash
 git clone https://github.com/jpers1/agent-cow-python.git
 cd agent-cow-python
-pip install -e ".[dev]"
-pytest agentcow/postgres/tests/ -v
+uv sync --frozen --group dev
+uv run python scripts/check_dependency_policy.py
+uv run pytest agentcow/postgres/tests/ -v
 ```
+
+The supported development group covers the hardened PostgreSQL subsystem and
+uses a permissive-only Python dependency set. Ruff is the formatter/checker;
+package builds use Setuptools. Inherited blob tests and their separate tooling
+are outside this standard downstream path. See the
+[dependency policy](./docs/DEPENDENCY_POLICY.md) and
+[inventory](./docs/DEPENDENCY_INVENTORY.md).
 
 ## Contributing
 

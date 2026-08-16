@@ -68,16 +68,16 @@ container images. Counts are `passed / failed / skipped`.
 | Major | Status | Exact image | `server_version` | Python | Result | Pytest duration |
 | --- | --- | --- | --- | --- | --- | --- |
 | 13 and earlier | UNSUPPORTED | — | — | — | Below the downstream minimum | — |
-| 14 | SUPPORTED | `postgres:14.24` | `14.24 (Debian 14.24-1.pgdg13+2)` | 3.10.21 | 147 / 0 / 0 | 110.800 s |
-| 14 | SUPPORTED | `postgres:14.24` | `14.24 (Debian 14.24-1.pgdg13+2)` | 3.12.14 | 147 / 0 / 0 | 150.773 s |
-| 15 | SUPPORTED | `postgres:15.19` | `15.19 (Debian 15.19-1.pgdg13+2)` | 3.12.14 | 147 / 0 / 0 | 108.131 s |
-| 16 | SUPPORTED | `postgres:16.15` | `16.15 (Debian 16.15-1.pgdg13+2)` | 3.12.14 | 147 / 0 / 0 | 110.763 s |
-| 17 | SUPPORTED | `postgres:17.11` | `17.11 (Debian 17.11-1.pgdg13+2)` | 3.12.14 | 147 / 0 / 0 | 70.594 s |
-| 18 | SUPPORTED | `postgres:18.6` | `18.6 (Debian 18.6-1.pgdg13+2)` | 3.10.21 | 147 / 0 / 0 | 73.066 s |
-| 18 | SUPPORTED | `postgres:18.6` | `18.6 (Debian 18.6-1.pgdg13+2)` | 3.11.16 | 147 / 0 / 0 | 72.409 s |
-| 18 | SUPPORTED | `postgres:18.6` | `18.6 (Debian 18.6-1.pgdg13+2)` | 3.12.14 | 147 / 0 / 0 | 63.057 s |
-| 18 | SUPPORTED | `postgres:18.6` | `18.6 (Debian 18.6-1.pgdg13+2)` | 3.13.15 | 147 / 0 / 0 | 63.320 s |
-| 18 | SUPPORTED | `postgres:18.6` | `18.6 (Debian 18.6-1.pgdg13+2)` | 3.14.7 | 147 / 0 / 0 | 67.262 s |
+| 14 | SUPPORTED | `postgres:14.24` | `14.24 (Debian 14.24-1.pgdg13+2)` | 3.10.21 | 147 / 0 / 0 | 107.428 s |
+| 14 | SUPPORTED | `postgres:14.24` | `14.24 (Debian 14.24-1.pgdg13+2)` | 3.12.14 | 147 / 0 / 0 | 109.104 s |
+| 15 | SUPPORTED | `postgres:15.19` | `15.19 (Debian 15.19-1.pgdg13+2)` | 3.12.14 | 147 / 0 / 0 | 84.075 s |
+| 16 | SUPPORTED | `postgres:16.15` | `16.15 (Debian 16.15-1.pgdg13+2)` | 3.12.14 | 147 / 0 / 0 | 85.761 s |
+| 17 | SUPPORTED | `postgres:17.11` | `17.11 (Debian 17.11-1.pgdg13+2)` | 3.12.14 | 147 / 0 / 0 | 67.664 s |
+| 18 | SUPPORTED | `postgres:18.6` | `18.6 (Debian 18.6-1.pgdg13+2)` | 3.10.21 | 147 / 0 / 0 | 70.774 s |
+| 18 | SUPPORTED | `postgres:18.6` | `18.6 (Debian 18.6-1.pgdg13+2)` | 3.11.16 | 147 / 0 / 0 | 67.453 s |
+| 18 | SUPPORTED | `postgres:18.6` | `18.6 (Debian 18.6-1.pgdg13+2)` | 3.12.14 | 147 / 0 / 0 | 68.562 s |
+| 18 | SUPPORTED | `postgres:18.6` | `18.6 (Debian 18.6-1.pgdg13+2)` | 3.13.15 | 147 / 0 / 0 | 68.165 s |
+| 18 | SUPPORTED | `postgres:18.6` | `18.6 (Debian 18.6-1.pgdg13+2)` | 3.14.7 | 147 / 0 / 0 | 68.443 s |
 | 19 and later | NOT_TESTED | — | — | — | Outside the current PostgreSQL release window | — |
 
 ## Hardened coverage
@@ -106,6 +106,8 @@ replace an existing same-named container, and removes its containers and
 anonymous volumes after success or failure:
 
 ```bash
+uv sync --frozen --group dev
+uv run python scripts/check_dependency_policy.py
 python scripts/test_postgres_matrix.py
 ```
 
@@ -141,12 +143,12 @@ pair is Python 3.10/PostgreSQL 14; the newest is Python 3.14/PostgreSQL 18.
 
 ## Test dependency note
 
-H08 adds no project dependency. The inherited development path already uses
-`pytest-postgresql` and its Psycopg dependency, which are LGPL-licensed and do
-not meet the downstream permissive-only target for the eventual standard test
-path. H08 keeps those historical dependencies only to execute the existing
-147-test evidence without weakening it. Replacing that fixture layer with
-permissive asyncpg/direct-container tooling remains H09 scope.
+H09 preserves the H08 ten-pair strategy and 147-test count while replacing the
+inherited `pytest-postgresql`/Psycopg fixture layer with asyncpg and direct
+disposable-database lifecycle management. Every matrix container installs from
+the locked `dev` group and runs the installed dependency-policy check before
+pytest. `pytest-postgresql`, Psycopg, mirakuru, Black, pathspec, Moto, and
+certifi are absent from that supported environment.
 
 The production package continues to have zero mandatory Python runtime
 dependencies. The preferred optional asyncpg 0.31.0 adapter is Apache-2.0 and

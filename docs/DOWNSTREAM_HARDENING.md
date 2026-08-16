@@ -257,9 +257,22 @@ pushes to `main`, and manual dispatch, plus boundary/primary package builds.
 The exact versions and evidence are maintained in
 [`SUPPORT_MATRIX.md`](SUPPORT_MATRIX.md).
 
-The inherited PostgreSQL fixture stack remains an explicitly recorded LGPL
-development limitation. H08 adds no project dependency and does not weaken or
-replace that test evidence; permissive-only fixture cleanup remains H09.
+H09 replaces the inherited fixture limitation described by the original H08
+evidence without changing the supported matrix or PostgreSQL behavior.
+
+### H09 implementation status and design
+
+H09 replaces `pytest-postgresql` and Psycopg with an asyncpg-backed disposable
+database fixture that consumes the H08 `PG_*` connection contract. A small
+test-only synchronous facade preserves the inherited implicit-transaction
+assertions while all database access, role setup, concurrency, and native
+adapter coverage use asyncpg. The complete 147-test tree remains intact.
+
+The standard `dev` group is now PostgreSQL-specific and permissive-only. Ruff
+replaces Black, Setuptools replaces Hatchling, and blob-only Moto tooling is no
+longer installed by the normal downstream workflow. CI validates the installed
+dependency set before running the unchanged H08 matrix and package builds.
+See [`DEPENDENCY_INVENTORY.md`](DEPENDENCY_INVENTORY.md).
 
 This ordering may change after review, but work should remain PR-sized. Tests
 for a hardening item should be introduced with its corresponding fix rather
