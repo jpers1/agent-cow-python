@@ -34,8 +34,10 @@ def test_recommended_asyncpg_example_uses_hardened_public_apis() -> None:
     assert "asyncpg_cow_session" in source
     assert "harden_cow_schema" in source
     assert "validate_cow_schema_privileges" in source
-    assert "commit_cow_session_schema" in source
-    assert "discard_cow_session_schema" in source
+    assert "asyncpg_cow_reviewer" in source
+    assert "reviewer.commit_session" in source
+    assert "reviewer.discard_session" in source
+    assert "reviewer_pool.acquire" not in source
     assert "SET LOCAL" not in source
     assert "x-cow-session-id" not in source.lower()
     assert "allow_unsafe_canonical_writes" not in source
@@ -67,6 +69,12 @@ def test_documented_hardened_public_api_names_exist() -> None:
     names = {
         "asyncpg_cow_session",
         "sqlalchemy_cow_session",
+        "asyncpg_cow_reviewer",
+        "sqlalchemy_cow_reviewer",
+        "CowReviewer",
+        "CowConflictError",
+        "PromotionResult",
+        "DiscardResult",
         "harden_cow_schema",
         "validate_cow_schema_privileges",
         "get_session_operations",

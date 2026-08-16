@@ -15,15 +15,11 @@ import uuid
 from typing import Any, Protocol
 
 from agentcow.postgres import (
-    CowConflict,
+    CowConflictError,
+    asyncpg_cow_reviewer,
     asyncpg_cow_session,
-    commit_cow_session_schema,
     deploy_cow_functions,
-    discard_cow_session_schema,
     enable_cow_schema,
-    get_cow_conflicts,
-    get_operation_dependencies,
-    get_session_operations,
     harden_cow_schema,
     validate_cow_schema_privileges,
 )
@@ -160,28 +156,24 @@ async def review_and_promote(
     workflow. Conflict inspection supports review, while the commit itself
     independently enforces the first-touch baseline under a database lock.
     """
-    async with reviewer_pool.acquire() as connection:
-        async with connection.transaction():
-            executor = AsyncpgExecutor(connection)
-            operations = await get_session_operations(
-                executor, trusted_session_id, schema=APPLICATION_SCHEMA
-            )
-            dependencies = await get_operation_dependencies(
-                executor, trusted_session_id, schema=APPLICATION_SCHEMA
-            )
-            conflicts: list[CowConflict] = await get_cow_conflicts(
-                executor, trusted_session_id, schema=APPLICATION_SCHEMA
-            )
-            if approve and conflicts:
+    async with asyncpg_cow_reviewer(reviewer_pool) as reviewer:
+        operations = await reviewer.operations(
+            trusted_session_id, schema=APPLICATION_SCHEMA
+        )
+        dependencies = await reviewer.dependencies(
+            trusted_session_id, schema=APPLICATION_SCHEMA
+        )
+        if approve:
+            try:
+                await reviewer.commit_session(
+                    trusted_session_id, schema=APPLICATION_SCHEMA
+                )
+            except CowConflictError as exc:
                 raise ExampleRequestError(
-                    f"promotion has {len(conflicts)} canonical conflict(s)"
-                )
-            if approve:
-                await commit_cow_session_schema(
-                    executor, trusted_session_id, schema=APPLICATION_SCHEMA
-                )
-            else:
-                await discard_cow_session_schema(
-                    executor, trusted_session_id, schema=APPLICATION_SCHEMA
-                )
-            return operations, dependencies
+                    f"promotion has {len(exc.conflicts)} canonical conflict(s)"
+                ) from exc
+        else:
+            await reviewer.discard_session(
+                trusted_session_id, schema=APPLICATION_SCHEMA
+            )
+        return operations, dependencies

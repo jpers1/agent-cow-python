@@ -36,6 +36,8 @@ from .cow_sql_functions import (
     DISCARD_COW_SQL,
     TEARDOWN_COW_SQL,
     GET_DIRTY_CHANGES_TABLES_SQL,
+    LOCK_COW_SESSION_SQL,
+    GET_COW_OPERATION_TABLES_SQL,
     GET_COW_DEPENDENCIES_SQL,
     GET_SESSION_OPERATIONS_SQL,
     GET_COW_DIRTY_TABLES_SQL,
@@ -72,6 +74,8 @@ from .operations import (
     get_cow_conflicts_sql,
     set_visible_operations_sql,
     get_dirty_tables_sql,
+    lock_cow_session_sql,
+    get_cow_operation_tables_sql,
     _quote_ident,
     _quote_literal,
 )
@@ -142,6 +146,8 @@ _REVIEWER_FUNCTIONS = (
     ("commit_cow_delete", "text, text, text[], uuid, uuid[], text"),
     ("commit_cow_cleanup", "text, text, uuid, uuid[]"),
     ("discard_cow", "text, text, uuid, uuid[]"),
+    ("_cow_lock_session", "text, uuid"),
+    ("_cow_operation_tables", "text, uuid, uuid[]"),
 )
 
 # ---------------------------------------------------------------------------
@@ -261,6 +267,8 @@ async def deploy_cow_functions(executor: Executor) -> None:
         DISCARD_COW_SQL,
         TEARDOWN_COW_SQL,
         GET_DIRTY_CHANGES_TABLES_SQL,
+        LOCK_COW_SESSION_SQL,
+        GET_COW_OPERATION_TABLES_SQL,
         GET_COW_DEPENDENCIES_SQL,
         GET_SESSION_OPERATIONS_SQL,
         GET_COW_DIRTY_TABLES_SQL,
@@ -1047,6 +1055,35 @@ async def get_dirty_tables(
     return [row[0] for row in rows]
 
 
+async def _lock_cow_session_tables(
+    executor: Executor,
+    session_id: str | uuid.UUID,
+    schema: str = "public",
+) -> list[str]:
+    """Lock and return every table currently dirty for one session.
+
+    The controlled PostgreSQL helper acquires all canonical/change-table locks
+    in name order.  It is intentionally internal: high-level reviewer scopes
+    use it to establish a stable multi-table promotion set.
+    """
+    rows = await executor.execute(lock_cow_session_sql(schema, session_id))
+    return [row[0] for row in rows]
+
+
+async def _get_cow_operation_tables(
+    executor: Executor,
+    session_id: str | uuid.UUID,
+    operation_ids: list[str | uuid.UUID],
+    schema: str = "public",
+) -> list[str]:
+    if not operation_ids:
+        return []
+    rows = await executor.execute(
+        get_cow_operation_tables_sql(schema, session_id, operation_ids)
+    )
+    return [row[0] for row in rows]
+
+
 async def _get_fk_edges(
     executor: Executor,
     schema: str,
@@ -1097,7 +1134,7 @@ async def commit_cow_session_schema(
     Returns the list of table names that were committed (in the order
     they were processed).
     """
-    tables = await get_dirty_tables(executor, session_id, schema)
+    tables = await _lock_cow_session_tables(executor, session_id, schema)
     if not tables:
         return []
 
@@ -1159,7 +1196,7 @@ async def discard_cow_session_schema(
 
     Returns the list of table names that were discarded.
     """
-    tables = await get_dirty_tables(executor, session_id, schema)
+    tables = await _lock_cow_session_tables(executor, session_id, schema)
     for table_name in tables:
         await discard_cow_session(executor, table_name, session_id, schema=schema)
     return tables
@@ -1211,6 +1248,167 @@ async def discard_cow_operations(
     await executor.execute(
         discard_cow_operations_sql(schema, base_table, session_id, operation_ids)
     )
+
+
+def _selected_pending_operations(
+    pending: list[uuid.UUID],
+    requested: list[str | uuid.UUID],
+) -> list[uuid.UUID]:
+    selected = {
+        value if isinstance(value, uuid.UUID) else uuid.UUID(value)
+        for value in requested
+    }
+    return [operation_id for operation_id in pending if operation_id in selected]
+
+
+def _require_schema_selection_is_causal(
+    pending: list[uuid.UUID],
+    dependencies: list[tuple[uuid.UUID, uuid.UUID]],
+    selected: list[uuid.UUID],
+    *,
+    discard: bool,
+) -> None:
+    pending_set = set(pending)
+    selected_set = set(selected)
+    if discard:
+        invalid = [
+            (predecessor, operation)
+            for predecessor, operation in dependencies
+            if predecessor in selected_set
+            and operation in pending_set
+            and operation not in selected_set
+        ]
+        action = "discard"
+        detail = "a surviving operation depends on a selected predecessor"
+    else:
+        invalid = [
+            (predecessor, operation)
+            for predecessor, operation in dependencies
+            if operation in selected_set
+            and predecessor in pending_set
+            and predecessor not in selected_set
+        ]
+        action = "commit"
+        detail = "a selected operation has an unselected predecessor"
+    if invalid:
+        predecessor, operation = invalid[0]
+        raise ValueError(
+            f"Selective COW {action} is not causally valid: {detail} "
+            f"({predecessor} -> {operation})"
+        )
+
+
+async def commit_cow_operations_schema(
+    executor: Executor,
+    session_id: str | uuid.UUID,
+    operation_ids: list[str | uuid.UUID],
+    schema: str = "public",
+    defer_fk_constraints: bool = False,
+    conflict_policy: str = "error",
+) -> list[str]:
+    """Commit selected operations across all affected tables.
+
+    This low-level helper requires the caller to own one transaction.  It
+    locks the complete dirty table set, enforces global dependency closure,
+    phases FK-ordered mutation, and cleans selected rows only after every
+    mutation phase succeeds.
+    """
+    if not operation_ids:
+        return []
+    await _lock_cow_session_tables(executor, session_id, schema)
+    pending = await get_session_operations(executor, session_id, schema)
+    selected = _selected_pending_operations(pending, operation_ids)
+    if not selected:
+        return []
+    dependencies = await get_operation_dependencies(executor, session_id, schema)
+    _require_schema_selection_is_causal(pending, dependencies, selected, discard=False)
+    tables = await _get_cow_operation_tables(executor, session_id, selected, schema)
+    if not tables:
+        return []
+
+    if defer_fk_constraints:
+        async with deferred_fk_constraints(executor):
+            for table_name in tables:
+                await commit_cow_operations(
+                    executor,
+                    table_name,
+                    session_id,
+                    selected,
+                    schema=schema,
+                    conflict_policy=conflict_policy,
+                )
+        return tables
+
+    base_tables = [f"{table}_base" for table in tables]
+    edges = await _get_fk_edges(executor, schema, base_tables)
+    ordered = _topologically_sort_tables(tables, edges)
+
+    for table_name in ordered:
+        base_table = f"{table_name}_base"
+        pk_cols = await _get_pk_cols(executor, schema, base_table)
+        await executor.execute(
+            commit_cow_upsert_sql(
+                schema,
+                base_table,
+                pk_cols,
+                session_id,
+                selected,
+                conflict_policy,
+            )
+        )
+
+    for table_name in reversed(ordered):
+        base_table = f"{table_name}_base"
+        pk_cols = await _get_pk_cols(executor, schema, base_table)
+        await executor.execute(
+            commit_cow_delete_sql(
+                schema,
+                base_table,
+                pk_cols,
+                session_id,
+                selected,
+                conflict_policy,
+            )
+        )
+
+    for table_name in ordered:
+        await executor.execute(
+            commit_cow_cleanup_sql(
+                schema,
+                f"{table_name}_base",
+                session_id,
+                selected,
+            )
+        )
+    return ordered
+
+
+async def discard_cow_operations_schema(
+    executor: Executor,
+    session_id: str | uuid.UUID,
+    operation_ids: list[str | uuid.UUID],
+    schema: str = "public",
+) -> list[str]:
+    """Atomically discard a causally valid operation subset when transacted."""
+    if not operation_ids:
+        return []
+    await _lock_cow_session_tables(executor, session_id, schema)
+    pending = await get_session_operations(executor, session_id, schema)
+    selected = _selected_pending_operations(pending, operation_ids)
+    if not selected:
+        return []
+    dependencies = await get_operation_dependencies(executor, session_id, schema)
+    _require_schema_selection_is_causal(pending, dependencies, selected, discard=True)
+    tables = await _get_cow_operation_tables(executor, session_id, selected, schema)
+    for table_name in tables:
+        await discard_cow_operations(
+            executor,
+            table_name,
+            session_id,
+            selected,
+            schema=schema,
+        )
+    return tables
 
 
 # ---------------------------------------------------------------------------

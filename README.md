@@ -141,6 +141,8 @@ for the complete deployment, runtime, and reviewer example.
 
 - `asyncpg_cow_session(connection_or_pool, session_id=...)` — Recommended transaction-owning asyncpg request scope
 - `sqlalchemy_cow_session(engine_or_session, session_id=...)` — Equivalent optional SQLAlchemy async scope
+- `asyncpg_cow_reviewer(connection_or_pool)` — Recommended atomic asyncpg promotion/discard scope
+- `sqlalchemy_cow_reviewer(engine_or_session)` — Equivalent optional SQLAlchemy reviewer scope
 - `CowPostgresConfig` — Dataclass for COW configuration
 - `build_cow_variable_statements(session_id, operation_id)` — Build low-level transaction-local context statements
 

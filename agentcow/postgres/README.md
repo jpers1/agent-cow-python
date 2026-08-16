@@ -124,44 +124,38 @@ reviewer credentials:
 
 ```python
 from agentcow.postgres import (
-    commit_cow_session_schema,
-    discard_cow_session_schema,
-    get_cow_conflicts,
-    get_operation_dependencies,
-    get_session_operations,
+    CowConflictError,
+    asyncpg_cow_reviewer,
 )
 
-reviewer_connection = await asyncpg.connect(REVIEWER_DATABASE_URL)
-try:
-    async with reviewer_connection.transaction():
-        reviewer = AsyncpgExecutor(reviewer_connection)
-        operations = await get_session_operations(
-            reviewer, trusted_session_id, schema="content"
-        )
-        dependencies = await get_operation_dependencies(
-            reviewer, trusted_session_id, schema="content"
-        )
-        conflicts = await get_cow_conflicts(
-            reviewer, trusted_session_id, schema="content"
-        )
+reviewer_pool = await asyncpg.create_pool(REVIEWER_DATABASE_URL)
 
-        if application_or_human_approved and not conflicts:
-            await commit_cow_session_schema(
-                reviewer, trusted_session_id, schema="content"
+async with asyncpg_cow_reviewer(reviewer_pool) as reviewer:
+    operations = await reviewer.operations(
+        trusted_session_id, schema="content"
+    )
+    dependencies = await reviewer.dependencies(
+        trusted_session_id, schema="content"
+    )
+    if application_or_human_approved:
+        try:
+            result = await reviewer.commit_session(
+                trusted_session_id, schema="content"
             )
-        else:
-            await discard_cow_session_schema(
-                reviewer, trusted_session_id, schema="content"
-            )
-finally:
-    await reviewer_connection.close()
+        except CowConflictError as conflict:
+            show_conflicts_to_reviewer(conflict.conflicts)
+            raise
+    else:
+        result = await reviewer.discard_session(
+            trusted_session_id, schema="content"
+        )
 ```
 
 The runtime role cannot inspect internal tables or promote changes. Conflict
 inspection is useful for review, but commit independently enforces the stored
 first-touch baseline while blocking concurrent canonical DML. The reviewer
-example owns its connection and explicit transaction directly until H07 adds
-a higher-level promotion transaction API.
+scope owns one connection and transaction through mutation, cleanup, and pool
+release; any failure rolls the complete action back.
 
 ## Optimistic conflicts
 
@@ -178,15 +172,9 @@ pending rows remain available after the failed transaction is rolled back.
 `get_cow_conflicts(...)` returns structured conflict details for reviewer UIs,
 but is advisory; promotion always validates again under a table lock.
 
-```python
-conflicts = await get_cow_conflicts(
-    reviewer, trusted_session_id, schema="content"
-)
-if not conflicts:
-    await commit_cow_session_schema(
-        reviewer, trusted_session_id, schema="content"
-    )
-```
+`CowReviewer.conflicts(...)` supports advisory UI inspection.
+`CowReviewer.commit_session(...)` repeats the authoritative checks under the
+same transaction's locks and raises `CowConflictError` on conflict.
 
 The comparison is current-state based. A canonical row that changes and then
 returns exactly to its baseline is not treated as historically changed. An
@@ -199,9 +187,9 @@ last-writer-wins promotion. Hardened integrations should retain the default
 
 Selective commit accepts only a causal prefix for each key and rebases later
 pending operations onto the state just accepted by that same session.
-Selective discard preserves the original baseline. Schema-wide promotion must
-remain inside one explicit reviewer transaction until H07 supplies a
-transaction-owning promotion scope.
+Selective discard preserves the original baseline. The high-level reviewer
+methods make full-session and selective actions atomic across every affected
+table.
 
 An empty pre-H06 changes table upgrades automatically. Pending pre-H06 rows
 cannot be assigned a truthful first-touch baseline, so deployment refuses the
@@ -306,6 +294,10 @@ independently implements every lifecycle guarantee.
 | `get_session_operations(executor, session_id, *, schema="public")` | List all operation UUIDs in a session |
 | `get_operation_dependencies(executor, session_id, *, schema="public")` | Get `(depends_on, operation_id)` pairs for a session |
 | `get_cow_conflicts(executor, session_id, *, schema="public", operation_ids=None)` | Inspect structured first-touch conflicts through the controlled reviewer API |
+| `asyncpg_cow_reviewer(connection_or_pool)` | Recommended reviewer scope: pins one asyncpg connection and owns the complete promotion/discard transaction |
+| `sqlalchemy_cow_reviewer(engine_connection_session_or_factory)` | Equivalent optional SQLAlchemy asyncio reviewer scope |
+| `CowReviewer.commit_session(...)` / `discard_session(...)` | Atomically promote or discard every dirty table and return a structured result |
+| `CowReviewer.commit_operations(...)` / `discard_operations(...)` | Atomically apply a causally valid operation selection across tables |
 | `set_visible_operations(executor, operation_ids)` | Filter which operations' changes are visible in subsequent reads |
 | `get_cow_status(executor, *, schema="public")` | Get COW status: deployed functions, enabled tables, changes tables |
 | `is_cow_enabled(executor, config, *, schema="public")` | Check if COW is both requested and properly configured |
@@ -319,6 +311,8 @@ independently implements every lifecycle guarantee.
 | `discard_cow_session(executor, table_name, session_id, *, schema="public")` | Discard all session changes |
 | `commit_cow_operations(executor, table_name, session_id, operation_ids, *, pk_cols=None, schema="public", conflict_policy="error")` | Commit a causally valid operation prefix with conflict checking |
 | `discard_cow_operations(executor, table_name, session_id, operation_ids, *, schema="public")` | Discard specific operations |
+| `commit_cow_operations_schema(executor, session_id, operation_ids, *, schema="public", conflict_policy="error")` | Low-level schema-wide selective commit; caller must own one transaction |
+| `discard_cow_operations_schema(executor, session_id, operation_ids, *, schema="public")` | Low-level schema-wide selective discard; caller must own one transaction |
 
 ### Teardown
 
@@ -357,6 +351,9 @@ Without the opt-in, **no schema changes** are made by agent-cow.
 | Type | Description |
 |------|-------------|
 | `CowSession` | Active high-level scope with `execute`, context validation, operation/visibility switching, explicit rollback, and `native` adapter access |
+| `CowReviewer` | Active high-level reviewer scope with inspection plus one atomic terminal action |
+| `PromotionResult` / `DiscardResult` | Immutable structured terminal-action outcomes, including tables, operations, pending state, and no-op status |
+| `CowConflictError` | Stable Python conflict exception with structured conflict details where available |
 | `Executor` | Protocol — any object with `async execute(sql: str) -> list[tuple]` |
 | `CowPostgresConfig` | Dataclass with `agent_session_id`, `operation_id`, `visible_operations` fields |
 | `CowStatus` | TypedDict with `enabled`, `tables_with_cow`, `changes_tables`, `cow_functions_deployed` fields |

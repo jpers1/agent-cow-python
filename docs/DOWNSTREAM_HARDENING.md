@@ -161,8 +161,7 @@ H05 makes the hardened asyncpg path the primary public integration pattern.
 The recommended example separates setup, runtime, and reviewer credentials;
 resolves opaque external authorization through application-owned state to a
 server-selected UUID; runs CRUD through `asyncpg_cow_session(...)`; and keeps
-promotion behind controlled reviewer APIs and an explicit reviewer
-transaction.
+promotion behind the transaction-owning reviewer API.
 
 The former HTTP-header parser example was removed because parsing a
 client-supplied session UUID was not a useful authorization boundary. The
@@ -198,9 +197,8 @@ session. Selective discard retains the original baseline.
 
 The comparison is state-based. If canonical state changes and later returns
 exactly to the stored row and schema, H06 does not report a historical-write
-conflict. Multi-table promotion remains caller-transactional until H07: callers
-must place `commit_cow_session_schema(...)` in one explicit reviewer
-transaction for all-or-nothing behavior.
+conflict. H07 supplies the transaction-owning multi-table boundary; the H06
+low-level helpers still require caller-managed transaction correctness.
 
 An empty H05 changes table is upgraded automatically. Deployment refuses an
 enabled table with pending pre-H06 rows because their first-touch baseline
@@ -208,6 +206,40 @@ cannot be reconstructed truthfully. Pending sessions must be committed or
 discarded with the previous version before deployment. Existing hardened
 schemas must run `harden_cow_schema(...)` again in the deployment transaction
 so reviewer roles receive the new controlled conflict and commit signatures.
+
+### H07 implementation status and design
+
+H07 adds `asyncpg_cow_reviewer(...)` and the optional
+`sqlalchemy_cow_reviewer(...)`. Each scope pins one physical connection,
+rejects an existing transaction or stale runtime GUC context, starts one
+transaction, permits inspection followed by one terminal promotion/discard
+action, and commits only after mutation and cleanup finish. Conflict,
+constraint, injected SQL, exception, and cancellation paths roll back under
+shielded cleanup before a pooled connection is released.
+
+`CowReviewer` supports whole-session and selective `commit_*`/`discard_*`
+methods. It returns `PromotionResult` or `DiscardResult`, and maps conflict
+SQLSTATE `40001` to `CowConflictError` with structured conflict details when
+available. Duplicate commit/discard, unknown session, and crossed terminal
+requests are successful no-op results when no pending COW state exists.
+
+Runtime writes take a shared transaction-scoped advisory lock for their schema
+and session; the controlled `_cow_lock_session` function takes the matching
+exclusive reviewer lock, then locks every dirty canonical and changes table in
+deterministic name order before inspection or mutation. New same-session work
+therefore waits until review finishes instead of changing the promoted set.
+Schema-wide commits then retain H06's FK-aware upsert/delete phases and
+authoritative locked conflict checks; schema-wide selective operations also
+enforce global dependency closure. `READ COMMITTED` is sufficient because
+these explicit transaction-level locks protect the complete promotion set.
+Unrelated table sets can proceed independently; overlapping sets serialize at
+table granularity.
+
+Low-level `commit_cow_*` and `discard_cow_*` helpers remain additive APIs for
+advanced callers, but multi-statement use requires one caller-owned physical
+connection and transaction. Existing hardened deployments must deploy the H07
+functions and rerun `harden_cow_schema(...)` so reviewer roles receive the two
+new controlled helper grants.
 
 This ordering may change after review, but work should remain PR-sized. Tests
 for a hardening item should be introduced with its corresponding fix rather

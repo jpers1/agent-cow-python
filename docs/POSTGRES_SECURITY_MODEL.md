@@ -182,22 +182,25 @@ different operation UUIDs. This is first-touch row detection, not a database
 snapshot at session creation and not a substitute for an application's
 optional session-wide revision policy.
 
-Reviewers may inspect current conflicts without internal-table access:
+Reviewers should use the transaction-owning scope, which supports inspection
+without internal-table access and makes the subsequent action atomic:
 
 ```python
-from agentcow.postgres import get_cow_conflicts
+from agentcow.postgres import asyncpg_cow_reviewer
 
-conflicts = await get_cow_conflicts(
-    reviewer,
-    trusted_session_id,
-    schema="content",
-)
+async with asyncpg_cow_reviewer(reviewer_pool) as reviewer:
+    conflicts = await reviewer.conflicts(
+        trusted_session_id, schema="content"
+    )
+    result = await reviewer.commit_session(
+        trusted_session_id, schema="content"
+    )
 ```
 
-The result identifies the table, primary key, latest relevant operation and
-one of `BASE_ROW_CHANGED`, `BASE_ROW_DELETED`, `BASE_ROW_CREATED`, or
-`BASE_SCHEMA_CHANGED`. Inspection is advisory. It does not authorize a later
-commit and cannot replace the check inside promotion.
+Each conflict record identifies the table, primary key, latest relevant
+operation and one of `BASE_ROW_CHANGED`, `BASE_ROW_DELETED`,
+`BASE_ROW_CREATED`, or `BASE_SCHEMA_CHANGED`. Inspection is advisory. It does
+not authorize a later commit and cannot replace the check inside promotion.
 
 Commit uses `conflict_policy="error"` by default. Each per-table promotion
 locks canonical and pending state against concurrent canonical DML, validates
@@ -219,9 +222,31 @@ baseline, promotion is allowed. The table lock also means conflicting
 promotion serializes canonical writers at table granularity; this favors a
 generic correctness guarantee over maximum writer concurrency.
 
-Until H07, the reviewer owns the outer promotion transaction. A schema-wide
-commit must run in one explicit transaction if the caller requires
-all-or-nothing behavior across tables.
+The high-level reviewer scope pins one connection, begins one explicit
+transaction, takes a session-scoped advisory lock, locks the complete dirty
+table set in deterministic name order, and includes FK-ordered mutation plus
+cleanup in that transaction. Runtime COW writes take the matching shared lock,
+so new work for that schema/session waits until review ends. A conflict
+or later table/constraint/cleanup failure rolls back earlier canonical writes
+and preserves all pending state. Cancellation rollback is shielded before a
+pooled connection is released. Duplicate terminal requests with no pending
+work return structured no-op results.
+
+Selective commit/discard is also schema-wide and atomic. The locked operation
+set must be causally closed: a selected commit cannot omit a pending
+predecessor, and a discard cannot leave a pending dependent whose predecessor
+was removed. Surviving later operations keep H06 rebase semantics.
+
+PostgreSQL's default `READ COMMITTED` isolation is sufficient for this API
+because H06/H07 explicitly lock every affected canonical and changes table for
+the transaction. Overlapping reviewer actions serialize at table granularity;
+unrelated table sets do not acquire common locks.
+
+`CowConflictError` is the stable Python conflict contract. Constraint and
+other database failures retain their adapter-native exception types, while
+invalid selections and stale connection state use distinct agent-cow
+exceptions. The low-level commit/discard functions remain available, but a
+caller using them must pin one connection and own one explicit transaction.
 
 When upgrading an existing hardened schema to H06, first remove pending work
 using the previous version. Deploy H06 and rerun `harden_cow_schema(...)` in
@@ -243,5 +268,4 @@ The complete public asyncpg example is
 [`asyncpg_safe_session_example.py`](../agentcow/postgres/examples/asyncpg_safe_session_example.py).
 It demonstrates setup, effective-privilege validation, runtime pool use,
 server-owned session resolution, conflict inspection, and reviewer-only
-conflict-safe promotion. The reviewer explicitly owns its transaction until
-H07.
+conflict-safe atomic promotion.

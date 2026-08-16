@@ -21,6 +21,8 @@ COW_FUNCTION_NAMES = (
     "discard_cow",
     "teardown_cow",
     "get_cow_conflicts",
+    "_cow_lock_session",
+    "_cow_operation_tables",
 )
 
 
@@ -619,4 +621,28 @@ def get_dirty_tables_sql(
     return (
         f"SELECT table_name FROM {_internal_function('get_cow_dirty_tables')}("
         f"{_quote_literal(schema)}, {_to_uuid(session_id)})"
+    )
+
+
+def lock_cow_session_sql(
+    schema: str,
+    session_id: str | uuid.UUID,
+) -> str:
+    """Lock every canonical/changes table currently dirty for a session."""
+    return (
+        f"SELECT table_name FROM {_internal_function('_cow_lock_session')}("
+        f"{_quote_literal(schema)}, {_to_uuid(session_id)})"
+    )
+
+
+def get_cow_operation_tables_sql(
+    schema: str,
+    session_id: str | uuid.UUID,
+    operation_ids: list[str | uuid.UUID],
+) -> str:
+    """Return dirty COW view names containing any selected operation."""
+    return (
+        f"SELECT table_name FROM {_internal_function('_cow_operation_tables')}("
+        f"{_quote_literal(schema)}, {_to_uuid(session_id)}, "
+        f"{_to_uuid_array(operation_ids)})"
     )
