@@ -72,10 +72,9 @@ dependency, and scoring paths use `_cow_order` whenever they need causal
 ordering.
 
 The sequence is owned by the schema owner and is dropped when the last ordered
-COW changes table in the schema is torn down. Because trigger functions remain
-security-invoker functions, a non-owner role that performs COW writes needs
-`USAGE` on the schema's `_cow_operation_order_seq` in addition to its existing
-table privileges.
+COW changes table in the schema is torn down. H03 removes runtime sequence
+access in a hardened schema by running the generated write triggers with the
+controlled setup owner's privileges.
 
 Deploying the downstream functions automatically upgrades an enabled
 upstream-format COW table only when its legacy changes table is empty. If
@@ -101,12 +100,38 @@ tracking, commit, discard, dependency discovery, or teardown. Existing
 entries for a non-public application schema are moved transactionally into
 that schema when the enabled table is redeployed.
 
-H03 must still define and test ownership, `USAGE`, `EXECUTE`, and table/sequence
-grants for the control and application schemas. H02 grants `PUBLIC` only
-`USAGE` on the new control schema to preserve the accessibility of helpers
-historically deployed in `public`; existing default function `EXECUTE`
-behavior is otherwise unchanged. H02 intentionally does not redesign
-PostgreSQL roles or change the current security-invoker model.
+H03 removes H02's temporary `PUBLIC` compatibility grants and defines the
+ownership, `USAGE`, `EXECUTE`, table, and sequence boundaries described below.
+
+### H03 implementation status and design
+
+H03 adds `harden_cow_schema(...)` for caller-supplied setup, runtime, and
+reviewer roles. Hardened runtime roles receive CRUD only on COW views. The
+generated write triggers become setup-owned `SECURITY DEFINER` functions with
+locked `pg_catalog` search paths and fully qualified application objects, so
+runtime roles need no direct change-table, registry, or sequence privilege.
+
+Reviewers receive view `SELECT` plus a narrow set of controlled inspection,
+dependency, commit, and discard functions. Setup and teardown remain
+owner-only invoker operations. The control schema and all deployed functions
+revoke default `PUBLIC` authority.
+
+Writes now fail closed by default when either transaction-local session or
+operation context is missing or malformed. The historical canonical
+write-through behavior requires the explicit
+`allow_unsafe_canonical_writes=True` compatibility option and is not permitted
+by the hardened role model.
+
+`validate_cow_schema_privileges(...)` checks effective privileges through
+direct grants, `PUBLIC`, ownership, inheritance, and every role reachable with
+`SET ROLE`. Unsafe inherited access is reported rather than revoked from an
+unlisted role. Apply hardening in an explicit transaction and roll it back if
+validation fails. The full deployment works with a non-superuser setup owner.
+
+Session UUID selection remains a trusted-application responsibility: a shared
+runtime role can set custom PostgreSQL GUC values. Database credentials and
+session selection must remain inside the trusted gateway. See
+[`POSTGRES_SECURITY_MODEL.md`](POSTGRES_SECURITY_MODEL.md).
 
 This ordering may change after review, but work should remain PR-sized. Tests
 for a hardening item should be introduced with its corresponding fix rather

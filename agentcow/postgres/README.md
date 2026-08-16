@@ -66,6 +66,11 @@ await enable_cow(executor, "users")
 await enable_cow(executor, "orders")
 ```
 
+Writes fail closed by default unless both transaction-local COW identifiers
+are set. Production deployments should also configure the explicit role
+boundary described in
+[`docs/POSTGRES_SECURITY_MODEL.md`](../../docs/POSTGRES_SECURITY_MODEL.md).
+
 ### 3. Run an agent session
 
 Each agent session gets a `session_id`. Each discrete action the agent takes gets an `operation_id`. These need to be set on the database connection before the agent runs queries — typically by passing them as HTTP request headers from your agent orchestrator to your backend, where middleware applies them to the connection.
@@ -186,8 +191,10 @@ for stmt in stmts:
 | Function | Description |
 |----------|-------------|
 | `deploy_cow_functions(executor)` | Deploy COW PL/pgSQL functions to the database |
-| `enable_cow(executor, table_name, *, pk_cols=None, schema="public", allow_deferred_fks=False)` | Enable COW on a single table. Primary keys are auto-detected if not provided. See [FK constraints](#fk-constraints-and-multi-table-commits) for `allow_deferred_fks` |
-| `enable_cow_schema(executor, *, schema="public", exclude=None, allow_deferred_fks=False)` | Enable COW on all user tables in a schema. Returns list of enabled table names |
+| `enable_cow(executor, table_name, *, pk_cols=None, schema="public", allow_deferred_fks=False, allow_unsafe_canonical_writes=False)` | Enable COW on a single table. Missing write context fails closed unless the unsafe compatibility option is explicitly enabled |
+| `enable_cow_schema(executor, *, schema="public", exclude=None, allow_deferred_fks=False, allow_unsafe_canonical_writes=False)` | Enable COW on all user tables in a schema. Returns list of enabled table names |
+| `harden_cow_schema(executor, schema, runtime_roles, reviewer_roles)` | Apply and validate the setup/runtime/reviewer privilege boundary |
+| `validate_cow_schema_privileges(executor, schema, runtime_roles, reviewer_roles)` | Validate effective direct, inherited, ownership, schema, function, table, and sequence privileges |
 
 ### Per-Request
 
