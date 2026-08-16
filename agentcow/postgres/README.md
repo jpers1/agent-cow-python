@@ -8,7 +8,9 @@ PostgreSQL backend for [agent-cow](../../README.md). Provides database-level Cop
 pip install agent-cow
 ```
 
-Requires Python 3.10+ and PostgreSQL 14+.
+The verified downstream range is Python 3.10–3.14 and PostgreSQL 14–18. See
+the [support matrix](../../docs/SUPPORT_MATRIX.md) for exact images, adapters,
+and evidence.
 
 For the preferred asyncpg runtime adapter:
 

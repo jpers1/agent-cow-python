@@ -241,6 +241,26 @@ connection and transaction. Existing hardened deployments must deploy the H07
 functions and rerun `harden_cow_schema(...)` so reviewer roles receive the two
 new controlled helper grants.
 
+### H08 implementation status and design
+
+H08 verifies a bounded downstream support window of Python 3.10–3.14 and
+PostgreSQL 14–18. The deliberate ten-pair matrix runs the complete 147-test
+PostgreSQL tree across every PostgreSQL major on Python 3.12, every Python
+minor on PostgreSQL 18, and the oldest boundary pair. Official patch-pinned
+PostgreSQL and Python containers make the local result reproducible without a
+host PostgreSQL port or hosted service.
+
+`scripts/test_postgres_matrix.py` automates isolated startup, readiness,
+fresh installation, full-suite execution, compile/import checks, result
+capture, and cleanup. GitHub Actions runs the same matrix for pull requests,
+pushes to `main`, and manual dispatch, plus boundary/primary package builds.
+The exact versions and evidence are maintained in
+[`SUPPORT_MATRIX.md`](SUPPORT_MATRIX.md).
+
+The inherited PostgreSQL fixture stack remains an explicitly recorded LGPL
+development limitation. H08 adds no project dependency and does not weaken or
+replace that test evidence; permissive-only fixture cleanup remains H09.
+
 This ordering may change after review, but work should remain PR-sized. Tests
 for a hardening item should be introduced with its corresponding fix rather
 than publishing private audit artifacts independently.
