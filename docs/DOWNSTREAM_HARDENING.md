@@ -171,6 +171,44 @@ SQLAlchemy example now imports its optional dependency lazily and uses only
 remain documented as advanced caller-managed APIs, while unsafe canonical
 write compatibility is explicitly limited to trusted canonical workflows.
 
+### H06 implementation status and design
+
+H06 adds row-level, first-touch optimistic conflict detection. The first COW
+write by a session to a primary key records whether the canonical row existed,
+the complete canonical row as `jsonb`, and a signature of the base-table
+columns. Every later operation on that key in the same session retains the
+original baseline. This is not a database snapshot taken when the session UUID
+is created.
+
+Promotion defaults to `conflict_policy="error"`. The commit functions take a
+`SHARE ROW EXCLUSIVE` lock on the canonical and changes tables, compare the
+current canonical row with the stored baseline, and apply the selected latest
+state before releasing that transaction-level lock. A concurrent canonical
+writer therefore cannot slip between validation and mutation. Conflicts raise
+SQLSTATE `40001`, leave canonical state untouched, and retain pending rows for
+review. The explicit `conflict_policy="overwrite"` option preserves historical
+last-writer-wins behavior for compatibility.
+
+`get_cow_conflicts(...)` gives the reviewer a controlled, structured view of
+row-created, row-deleted, row-changed, and schema-changed conflicts without
+granting access to changes tables. It is advisory; commit always repeats the
+authoritative check. Selective commit requires a causal prefix for each key and
+rebases surviving later operations onto the state accepted by that same
+session. Selective discard retains the original baseline.
+
+The comparison is state-based. If canonical state changes and later returns
+exactly to the stored row and schema, H06 does not report a historical-write
+conflict. Multi-table promotion remains caller-transactional until H07: callers
+must place `commit_cow_session_schema(...)` in one explicit reviewer
+transaction for all-or-nothing behavior.
+
+An empty H05 changes table is upgraded automatically. Deployment refuses an
+enabled table with pending pre-H06 rows because their first-touch baseline
+cannot be reconstructed truthfully. Pending sessions must be committed or
+discarded with the previous version before deployment. Existing hardened
+schemas must run `harden_cow_schema(...)` again in the deployment transaction
+so reviewer roles receive the new controlled conflict and commit signatures.
+
 This ordering may change after review, but work should remain PR-sized. Tests
 for a hardening item should be introduced with its corresponding fix rather
 than publishing private audit artifacts independently.

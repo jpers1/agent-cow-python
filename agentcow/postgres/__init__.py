@@ -2,6 +2,7 @@
 
 from .core import (
     CowStatus,
+    CowConflict,
     CowPrivilegeValidation,
     Executor,
     deferred_fk_constraints,
@@ -21,6 +22,7 @@ from .core import (
     discard_cow_operations,
     get_session_operations,
     get_operation_dependencies,
+    get_cow_conflicts,
     set_visible_operations,
     apply_cow_variables,
     reset_cow_variables,
@@ -46,6 +48,7 @@ from .types import (
 
 __all__ = [
     "CowStatus",
+    "CowConflict",
     "CowPrivilegeValidation",
     "Executor",
     "deferred_fk_constraints",
@@ -65,6 +68,7 @@ __all__ = [
     "discard_cow_operations",
     "get_session_operations",
     "get_operation_dependencies",
+    "get_cow_conflicts",
     "set_visible_operations",
     "apply_cow_variables",
     "reset_cow_variables",

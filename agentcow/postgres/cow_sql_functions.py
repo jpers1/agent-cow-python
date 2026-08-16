@@ -6,6 +6,9 @@ All functions are deployed to the database via ``deploy_cow_functions()``.
 
 COW_ORDER_COLUMN = "_cow_order"
 COW_ORDER_SEQUENCE_NAME = "_cow_operation_order_seq"
+COW_BASE_EXISTS_COLUMN = "_cow_base_exists"
+COW_BASE_ROW_COLUMN = "_cow_base_row"
+COW_BASE_SCHEMA_COLUMN = "_cow_base_schema"
 COW_INTERNAL_SCHEMA = "agentcow"
 
 CREATE_HARDENED_ROLES_TABLE_SQL = """
@@ -55,6 +58,51 @@ CREATE_INTERNAL_SCHEMA_SQL = "CREATE SCHEMA IF NOT EXISTS agentcow"
 DROP_LEGACY_SETUP_FUNCTION_SQL = (
     "DROP FUNCTION IF EXISTS agentcow.setup_cow(text, text, text, text[])"
 )
+
+DROP_LEGACY_COMMIT_FUNCTIONS_SQL = """
+DROP FUNCTION IF EXISTS
+    agentcow.commit_cow(text, text, text[], uuid, uuid[]),
+    agentcow.commit_cow_upsert(text, text, text[], uuid, uuid[]),
+    agentcow.commit_cow_delete(text, text, text[], uuid, uuid[])
+"""
+
+COW_SCHEMA_SIGNATURE_SQL = """
+CREATE OR REPLACE FUNCTION agentcow._cow_schema_signature(
+    p_schema text,
+    p_table text
+)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+SET search_path = pg_catalog
+AS $$
+    SELECT COALESCE(
+        jsonb_agg(
+            jsonb_build_array(
+                attr.attname,
+                format_type(attr.atttypid, attr.atttypmod),
+                attr.attnotnull,
+                attr.attidentity,
+                attr.attgenerated,
+                attr.attcollation::oid,
+                pg_get_expr(default_.adbin, default_.adrelid)
+            ) ORDER BY attr.attnum
+        ),
+        '[]'::jsonb
+    )
+    FROM pg_class table_
+    JOIN pg_namespace namespace_ ON namespace_.oid = table_.relnamespace
+    JOIN pg_attribute attr ON attr.attrelid = table_.oid
+    LEFT JOIN pg_attrdef default_
+      ON default_.adrelid = table_.oid
+     AND default_.adnum = attr.attnum
+    WHERE namespace_.nspname = p_schema
+      AND table_.relname = p_table
+      AND table_.relkind IN ('r', 'p')
+      AND attr.attnum > 0
+      AND NOT attr.attisdropped;
+$$;
+"""
 
 REQUIRE_REVIEWER_SQL = """
 CREATE OR REPLACE FUNCTION agentcow._cow_require_reviewer(p_schema text)
@@ -230,6 +278,12 @@ DECLARE
     pk_null_check        text;
     pk_delete_condition  text;
     pk_old_values        text;
+    pk_prior_new_condition text;
+    pk_prior_old_condition text;
+    pk_base_new_condition text;
+    pk_base_old_condition text;
+    pk_new_json          text;
+    pk_old_json          text;
 
     upsert_fn_name       text := p_view_name || '_cow_upsert';
     delete_fn_name       text := p_view_name || '_cow_delete';
@@ -240,6 +294,7 @@ DECLARE
     order_sequence_exists boolean;
     existing_sequence_comment text;
     has_order_column     boolean;
+    has_conflict_baseline boolean;
     has_pending_changes  boolean;
     legacy_registry_exists boolean;
     order_table          RECORD;
@@ -251,6 +306,8 @@ DECLARE
     trigger_security_clause text;
     missing_upsert_context_sql text;
     missing_delete_context_sql text;
+    capture_new_baseline_sql text;
+    capture_old_baseline_sql text;
 BEGIN
     SELECT
         COALESCE(
@@ -297,6 +354,92 @@ BEGIN
     pk_null_check := format('b.%I IS NULL', p_pk_cols[1]);
     pk_delete_condition := (SELECT string_agg(format('%I = OLD.%I', col, col), ' AND ') FROM unnest(p_pk_cols) col);
     pk_old_values := (SELECT string_agg(format('OLD.%I', col), ', ') FROM unnest(p_pk_cols) col);
+    pk_prior_new_condition := (SELECT string_agg(format('prior.%I = NEW.%I', col, col), ' AND ') FROM unnest(p_pk_cols) col);
+    pk_prior_old_condition := (SELECT string_agg(format('prior.%I = OLD.%I', col, col), ' AND ') FROM unnest(p_pk_cols) col);
+    pk_base_new_condition := (SELECT string_agg(format('base.%I = NEW.%I', col, col), ' AND ') FROM unnest(p_pk_cols) col);
+    pk_base_old_condition := (SELECT string_agg(format('base.%I = OLD.%I', col, col), ' AND ') FROM unnest(p_pk_cols) col);
+    pk_new_json := format(
+        'jsonb_build_object(%s)',
+        (SELECT string_agg(format('%L, NEW.%I', col, col), ', ') FROM unnest(p_pk_cols) col)
+    );
+    pk_old_json := format(
+        'jsonb_build_object(%s)',
+        (SELECT string_agg(format('%L, OLD.%I', col, col), ', ') FROM unnest(p_pk_cols) col)
+    );
+    capture_new_baseline_sql := format($capture$
+        PERFORM pg_advisory_xact_lock(
+            hashtextextended(
+                TG_TABLE_SCHEMA || '.' || TG_TABLE_NAME || ':' ||
+                sess::text || ':' || (%s)::text,
+                0
+            )
+        );
+        SELECT prior._cow_base_exists,
+               prior._cow_base_row,
+               prior._cow_base_schema
+        INTO baseline_exists, baseline_row, baseline_schema
+        FROM %s prior
+        WHERE prior.session_id = sess AND %s
+        ORDER BY prior._cow_order
+        LIMIT 1;
+        IF NOT FOUND THEN
+            baseline_schema := agentcow._cow_schema_signature(%L, %L);
+            SELECT true, to_jsonb(base)
+            INTO baseline_exists, baseline_row
+            FROM %s base
+            WHERE %s
+            LIMIT 1;
+            IF NOT FOUND THEN
+                baseline_exists := false;
+                baseline_row := NULL;
+            END IF;
+        END IF;
+    $capture$,
+        pk_new_json,
+        qual_changes,
+        pk_prior_new_condition,
+        p_schema,
+        p_base_table,
+        qual_base,
+        pk_base_new_condition
+    );
+    capture_old_baseline_sql := format($capture$
+        PERFORM pg_advisory_xact_lock(
+            hashtextextended(
+                TG_TABLE_SCHEMA || '.' || TG_TABLE_NAME || ':' ||
+                sess::text || ':' || (%s)::text,
+                0
+            )
+        );
+        SELECT prior._cow_base_exists,
+               prior._cow_base_row,
+               prior._cow_base_schema
+        INTO baseline_exists, baseline_row, baseline_schema
+        FROM %s prior
+        WHERE prior.session_id = sess AND %s
+        ORDER BY prior._cow_order
+        LIMIT 1;
+        IF NOT FOUND THEN
+            baseline_schema := agentcow._cow_schema_signature(%L, %L);
+            SELECT true, to_jsonb(base)
+            INTO baseline_exists, baseline_row
+            FROM %s base
+            WHERE %s
+            LIMIT 1;
+            IF NOT FOUND THEN
+                baseline_exists := false;
+                baseline_row := NULL;
+            END IF;
+        END IF;
+    $capture$,
+        pk_old_json,
+        qual_changes,
+        pk_prior_old_condition,
+        p_schema,
+        p_base_table,
+        qual_base,
+        pk_base_old_condition
+    );
 
     -- Registry state belongs to the application schema, not to the caller's
     -- search path or to a global public-schema assumption.
@@ -391,6 +534,9 @@ BEGIN
            _cow_deleted boolean NOT NULL DEFAULT false,
            _cow_updated_at timestamptz NOT NULL DEFAULT now(),
            _cow_order bigint NOT NULL DEFAULT nextval(%L::regclass),
+           _cow_base_exists boolean NOT NULL,
+           _cow_base_row jsonb,
+           _cow_base_schema jsonb NOT NULL,
            PRIMARY KEY (session_id, operation_id, %s)
          );',
         qual_changes, qual_base, qual_order_sequence, pk_cols_quoted
@@ -425,6 +571,54 @@ BEGIN
         EXECUTE format(
             'ALTER TABLE %s ALTER COLUMN _cow_order SET DEFAULT nextval(%L::regclass)',
             qual_changes, qual_order_sequence
+        );
+    END IF;
+
+    SELECT COUNT(*) = 3 AND bool_and(
+        CASE column_name
+            WHEN '_cow_base_exists' THEN
+                data_type = 'boolean' AND is_nullable = 'NO'
+            WHEN '_cow_base_row' THEN
+                data_type = 'jsonb' AND is_nullable = 'YES'
+            WHEN '_cow_base_schema' THEN
+                data_type = 'jsonb' AND is_nullable = 'NO'
+            ELSE false
+        END
+    )
+    INTO has_conflict_baseline
+    FROM information_schema.columns
+    WHERE table_schema = p_schema
+      AND table_name = changes_table_name
+      AND column_name IN (
+          '_cow_base_exists',
+          '_cow_base_row',
+          '_cow_base_schema'
+      );
+
+    IF NOT has_conflict_baseline THEN
+        EXECUTE format(
+            'SELECT EXISTS (SELECT 1 FROM %s LIMIT 1)',
+            qual_changes
+        ) INTO has_pending_changes;
+
+        IF has_pending_changes THEN
+            RAISE EXCEPTION
+                'Cannot add first-touch conflict baselines to %.% while pending pre-H06 COW changes exist; commit or discard them with the previous version first',
+                p_schema, changes_table_name
+                USING ERRCODE = '55000';
+        END IF;
+
+        EXECUTE format(
+            'ALTER TABLE %s ADD COLUMN IF NOT EXISTS _cow_base_exists boolean NOT NULL',
+            qual_changes
+        );
+        EXECUTE format(
+            'ALTER TABLE %s ADD COLUMN IF NOT EXISTS _cow_base_row jsonb',
+            qual_changes
+        );
+        EXECUTE format(
+            'ALTER TABLE %s ADD COLUMN IF NOT EXISTS _cow_base_schema jsonb NOT NULL',
+            qual_changes
         );
     END IF;
 
@@ -587,6 +781,9 @@ BEGIN
             sess_str text;
             op_id uuid;
             op_str text;
+            baseline_exists boolean;
+            baseline_row jsonb;
+            baseline_schema jsonb;
         BEGIN
             sess_str := NULLIF(current_setting('app.session_id', true), '');
             IF sess_str IS NOT NULL THEN
@@ -603,8 +800,17 @@ BEGIN
                 END IF;
                 op_id := op_str::uuid;
 
-                INSERT INTO %s (session_id, operation_id, %s, _cow_deleted, _cow_updated_at)
-                VALUES (sess, op_id, %s, false, now())
+                %s
+
+                INSERT INTO %s (
+                    session_id, operation_id, %s,
+                    _cow_deleted, _cow_updated_at,
+                    _cow_base_exists, _cow_base_row, _cow_base_schema
+                )
+                VALUES (
+                    sess, op_id, %s, false, now(),
+                    baseline_exists, baseline_row, baseline_schema
+                )
                 ON CONFLICT (session_id, operation_id, %s) %s;
 
                 INSERT INTO %s (schema_name, session_id, table_name)
@@ -618,6 +824,7 @@ BEGIN
     $f$,
         p_schema, upsert_fn_name, trigger_security_clause,
         missing_upsert_context_sql,
+        capture_new_baseline_sql,
         qual_changes, col_list, new_values_list, pk_cols_quoted, changes_on_conflict,
         qual_dirty_tables
     );
@@ -640,6 +847,9 @@ BEGIN
             sess_str text;
             op_id uuid;
             op_str text;
+            baseline_exists boolean;
+            baseline_row jsonb;
+            baseline_schema jsonb;
         BEGIN
             sess_str := NULLIF(current_setting('app.session_id', true), '');
             IF sess_str IS NOT NULL THEN
@@ -656,8 +866,17 @@ BEGIN
                 END IF;
                 op_id := op_str::uuid;
 
-                INSERT INTO %s (session_id, operation_id, %s, _cow_deleted, _cow_updated_at)
-                VALUES (sess, op_id, %s, true, now())
+                %s
+
+                INSERT INTO %s (
+                    session_id, operation_id, %s,
+                    _cow_deleted, _cow_updated_at,
+                    _cow_base_exists, _cow_base_row, _cow_base_schema
+                )
+                VALUES (
+                    sess, op_id, %s, true, now(),
+                    baseline_exists, baseline_row, baseline_schema
+                )
                 ON CONFLICT (session_id, operation_id, %s) DO UPDATE
                     SET _cow_deleted = true,
                         _cow_updated_at = now(),
@@ -674,6 +893,7 @@ BEGIN
     $f$,
         p_schema, delete_fn_name, trigger_security_clause,
         missing_delete_context_sql,
+        capture_old_baseline_sql,
         qual_changes, col_list, old_values_list, pk_cols_quoted,
         qual_dirty_tables
     );
@@ -699,13 +919,265 @@ END;
 $$;
 """
 
+GET_COW_CONFLICTS_SQL = """
+CREATE OR REPLACE FUNCTION agentcow.get_cow_conflicts(
+    p_schema          text,
+    p_base_table      text,
+    p_pk_cols         text[],
+    p_session         uuid,
+    p_operation_ids   uuid[] DEFAULT NULL,
+    p_deleted         boolean DEFAULT NULL
+)
+RETURNS TABLE (
+    table_name text,
+    primary_key jsonb,
+    conflict_kind text,
+    operation_id uuid,
+    cow_order bigint
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $$
+DECLARE
+    qual_base          text := format('%I.%I', p_schema, p_base_table);
+    qual_changes       text := format('%I.%I', p_schema, agentcow._cow_changes_table_name(p_base_table));
+    view_name          text := regexp_replace(p_base_table, '_base$', '');
+    pk_cols_quoted     text;
+    pk_join_condition  text;
+    pk_json            text;
+    base_present       text;
+    schema_signature   jsonb;
+BEGIN
+    PERFORM agentcow._cow_require_reviewer(p_schema);
+    PERFORM agentcow._cow_require_cow_table(p_schema, p_base_table);
+    PERFORM agentcow._cow_require_primary_key(p_schema, p_base_table, p_pk_cols);
+
+    pk_cols_quoted := (
+        SELECT string_agg(quote_ident(col), ', ')
+        FROM unnest(p_pk_cols) col
+    );
+    pk_join_condition := (
+        SELECT string_agg(format('c.%I = b.%I', col, col), ' AND ')
+        FROM unnest(p_pk_cols) col
+    );
+    pk_json := format(
+        'jsonb_build_object(%s)',
+        (
+            SELECT string_agg(format('%L, c.%I', col, col), ', ')
+            FROM unnest(p_pk_cols) col
+        )
+    );
+    base_present := format('b.%I IS NOT NULL', p_pk_cols[1]);
+    schema_signature := agentcow._cow_schema_signature(p_schema, p_base_table);
+
+    RETURN QUERY EXECUTE format($sql$
+        WITH latest AS (
+            SELECT DISTINCT ON (%s) *
+            FROM %s
+            WHERE session_id = $1
+              AND ($2::uuid[] IS NULL OR operation_id = ANY($2))
+            ORDER BY %s, _cow_order DESC
+        )
+        SELECT %L::text,
+               (%s),
+               CASE
+                   WHEN c._cow_base_schema IS DISTINCT FROM $4
+                       THEN 'BASE_SCHEMA_CHANGED'
+                   WHEN c._cow_base_exists AND NOT (%s)
+                       THEN 'BASE_ROW_DELETED'
+                   WHEN NOT c._cow_base_exists AND (%s)
+                       THEN 'BASE_ROW_CREATED'
+                   ELSE 'BASE_ROW_CHANGED'
+               END,
+               c.operation_id,
+               c._cow_order
+        FROM latest c
+        LEFT JOIN %s b ON %s
+        WHERE ($3::boolean IS NULL OR c._cow_deleted = $3)
+          AND (
+              c._cow_base_schema IS DISTINCT FROM $4
+              OR (c._cow_base_exists AND NOT (%s))
+              OR (NOT c._cow_base_exists AND (%s))
+              OR (
+                  c._cow_base_exists
+                  AND (%s)
+                  AND to_jsonb(b) IS DISTINCT FROM c._cow_base_row
+              )
+          )
+        ORDER BY c._cow_order
+    $sql$,
+        pk_cols_quoted,
+        qual_changes,
+        pk_cols_quoted,
+        view_name,
+        pk_json,
+        base_present,
+        base_present,
+        qual_base,
+        pk_join_condition,
+        base_present,
+        base_present,
+        base_present
+    ) USING p_session, p_operation_ids, p_deleted, schema_signature;
+END;
+$$;
+"""
+
+REQUIRE_SELECTIVE_PREFIX_SQL = """
+CREATE OR REPLACE FUNCTION agentcow._cow_require_selective_prefix(
+    p_schema          text,
+    p_base_table      text,
+    p_pk_cols         text[],
+    p_session         uuid,
+    p_operation_ids   uuid[]
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $$
+DECLARE
+    qual_changes       text := format('%I.%I', p_schema, agentcow._cow_changes_table_name(p_base_table));
+    pk_same_row        text;
+    pk_json            text;
+    invalid_operation  uuid;
+    invalid_key        text;
+BEGIN
+    IF p_operation_ids IS NULL THEN
+        RETURN;
+    END IF;
+
+    pk_same_row := (
+        SELECT string_agg(format('prior.%I = selected.%I', col, col), ' AND ')
+        FROM unnest(p_pk_cols) col
+    );
+    pk_json := format(
+        'jsonb_build_object(%s)',
+        (
+            SELECT string_agg(format('%L, selected.%I', col, col), ', ')
+            FROM unnest(p_pk_cols) col
+        )
+    );
+
+    EXECUTE format($sql$
+        SELECT selected.operation_id, (%s)::text
+        FROM %s selected
+        WHERE selected.session_id = $1
+          AND selected.operation_id = ANY($2)
+          AND EXISTS (
+              SELECT 1
+              FROM %s prior
+              WHERE prior.session_id = selected.session_id
+                AND %s
+                AND prior._cow_order < selected._cow_order
+                AND NOT (prior.operation_id = ANY($2))
+          )
+        ORDER BY selected._cow_order
+        LIMIT 1
+    $sql$, pk_json, qual_changes, qual_changes, pk_same_row)
+    INTO invalid_operation, invalid_key
+    USING p_session, p_operation_ids;
+
+    IF invalid_operation IS NOT NULL THEN
+        RAISE EXCEPTION
+            'Selective COW commit is not a causal prefix for key %; operation % has an unselected predecessor',
+            invalid_key, invalid_operation
+            USING ERRCODE = '22023';
+    END IF;
+END;
+$$;
+"""
+
+REBASE_COW_AFTER_COMMIT_SQL = """
+CREATE OR REPLACE FUNCTION agentcow._cow_rebase_after_commit(
+    p_schema          text,
+    p_base_table      text,
+    p_pk_cols         text[],
+    p_session         uuid,
+    p_operation_ids   uuid[],
+    p_deleted         boolean
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $$
+DECLARE
+    qual_base          text := format('%I.%I', p_schema, p_base_table);
+    qual_changes       text := format('%I.%I', p_schema, agentcow._cow_changes_table_name(p_base_table));
+    pk_cols_quoted     text;
+    pk_latest_base     text;
+    pk_remaining       text;
+    base_present       text;
+    schema_signature   jsonb;
+BEGIN
+    IF p_operation_ids IS NULL THEN
+        RETURN;
+    END IF;
+
+    pk_cols_quoted := (
+        SELECT string_agg(quote_ident(col), ', ')
+        FROM unnest(p_pk_cols) col
+    );
+    pk_latest_base := (
+        SELECT string_agg(format('latest.%I = b.%I', col, col), ' AND ')
+        FROM unnest(p_pk_cols) col
+    );
+    pk_remaining := (
+        SELECT string_agg(format('remaining.%I = rebased.%I', col, col), ' AND ')
+        FROM unnest(p_pk_cols) col
+    );
+    base_present := format('b.%I IS NOT NULL', p_pk_cols[1]);
+    schema_signature := agentcow._cow_schema_signature(p_schema, p_base_table);
+
+    EXECUTE format($sql$
+        WITH latest AS (
+            SELECT DISTINCT ON (%s) *
+            FROM %s
+            WHERE session_id = $1
+              AND operation_id = ANY($2)
+            ORDER BY %s, _cow_order DESC
+        ),
+        rebased AS (
+            SELECT latest.*,
+                   (%s) AS base_exists,
+                   CASE WHEN (%s) THEN to_jsonb(b) ELSE NULL END AS base_row
+            FROM latest
+            LEFT JOIN %s b ON %s
+            WHERE latest._cow_deleted = $3
+        )
+        UPDATE %s remaining
+        SET _cow_base_exists = rebased.base_exists,
+            _cow_base_row = rebased.base_row,
+            _cow_base_schema = $4
+        FROM rebased
+        WHERE remaining.session_id = $1
+          AND remaining._cow_order > rebased._cow_order
+          AND %s
+    $sql$,
+        pk_cols_quoted,
+        qual_changes,
+        pk_cols_quoted,
+        base_present,
+        base_present,
+        qual_base,
+        pk_latest_base,
+        qual_changes,
+        pk_remaining
+    ) USING p_session, p_operation_ids, p_deleted, schema_signature;
+END;
+$$;
+"""
+
 COMMIT_COW_UPSERT_SQL = """
 CREATE OR REPLACE FUNCTION agentcow.commit_cow_upsert(
     p_schema          text,
     p_base_table      text,
     p_pk_cols         text[],
     p_session         uuid,
-    p_operation_ids   uuid[] DEFAULT NULL
+    p_operation_ids   uuid[] DEFAULT NULL,
+    p_conflict_policy text DEFAULT 'error'
 )
 RETURNS void
 LANGUAGE plpgsql
@@ -718,10 +1190,45 @@ DECLARE
     pk_cols_quoted     text;
     update_set_clause  text;
     col_list           text;
+    detected_conflict  RECORD;
 BEGIN
     PERFORM agentcow._cow_require_reviewer(p_schema);
     PERFORM agentcow._cow_require_cow_table(p_schema, p_base_table);
     PERFORM agentcow._cow_require_primary_key(p_schema, p_base_table, p_pk_cols);
+
+    IF p_conflict_policy NOT IN ('error', 'overwrite') THEN
+        RAISE EXCEPTION 'Unsupported COW conflict policy: %', p_conflict_policy
+            USING ERRCODE = '22023';
+    END IF;
+
+    EXECUTE format(
+        'LOCK TABLE %s, %s IN SHARE ROW EXCLUSIVE MODE',
+        qual_base, qual_changes
+    );
+    PERFORM agentcow._cow_require_selective_prefix(
+        p_schema, p_base_table, p_pk_cols, p_session, p_operation_ids
+    );
+
+    IF p_conflict_policy = 'error' THEN
+        SELECT * INTO detected_conflict
+        FROM agentcow.get_cow_conflicts(
+            p_schema,
+            p_base_table,
+            p_pk_cols,
+            p_session,
+            p_operation_ids,
+            false
+        )
+        LIMIT 1;
+        IF FOUND THEN
+            RAISE EXCEPTION 'COW conflict on %.% key %: %',
+                p_schema,
+                regexp_replace(p_base_table, '_base$', ''),
+                detected_conflict.primary_key,
+                detected_conflict.conflict_kind
+                USING ERRCODE = '40001';
+        END IF;
+    END IF;
 
     pk_cols_quoted := (SELECT string_agg(quote_ident(col), ', ') FROM unnest(p_pk_cols) col);
 
@@ -769,6 +1276,15 @@ BEGIN
         $sql$, qual_base, col_list, pk_cols_quoted, qual_changes, pk_cols_quoted, pk_cols_quoted, update_set_clause)
         USING p_session, p_operation_ids;
     END IF;
+
+    PERFORM agentcow._cow_rebase_after_commit(
+        p_schema,
+        p_base_table,
+        p_pk_cols,
+        p_session,
+        p_operation_ids,
+        false
+    );
 END;
 $$;
 """
@@ -779,7 +1295,8 @@ CREATE OR REPLACE FUNCTION agentcow.commit_cow_delete(
     p_base_table      text,
     p_pk_cols         text[],
     p_session         uuid,
-    p_operation_ids   uuid[] DEFAULT NULL
+    p_operation_ids   uuid[] DEFAULT NULL,
+    p_conflict_policy text DEFAULT 'error'
 )
 RETURNS void
 LANGUAGE plpgsql
@@ -791,10 +1308,45 @@ DECLARE
     qual_changes       text := format('%I.%I', p_schema, agentcow._cow_changes_table_name(p_base_table));
     pk_cols_quoted     text;
     pk_join_condition  text;
+    detected_conflict  RECORD;
 BEGIN
     PERFORM agentcow._cow_require_reviewer(p_schema);
     PERFORM agentcow._cow_require_cow_table(p_schema, p_base_table);
     PERFORM agentcow._cow_require_primary_key(p_schema, p_base_table, p_pk_cols);
+
+    IF p_conflict_policy NOT IN ('error', 'overwrite') THEN
+        RAISE EXCEPTION 'Unsupported COW conflict policy: %', p_conflict_policy
+            USING ERRCODE = '22023';
+    END IF;
+
+    EXECUTE format(
+        'LOCK TABLE %s, %s IN SHARE ROW EXCLUSIVE MODE',
+        qual_base, qual_changes
+    );
+    PERFORM agentcow._cow_require_selective_prefix(
+        p_schema, p_base_table, p_pk_cols, p_session, p_operation_ids
+    );
+
+    IF p_conflict_policy = 'error' THEN
+        SELECT * INTO detected_conflict
+        FROM agentcow.get_cow_conflicts(
+            p_schema,
+            p_base_table,
+            p_pk_cols,
+            p_session,
+            p_operation_ids,
+            true
+        )
+        LIMIT 1;
+        IF FOUND THEN
+            RAISE EXCEPTION 'COW conflict on %.% key %: %',
+                p_schema,
+                regexp_replace(p_base_table, '_base$', ''),
+                detected_conflict.primary_key,
+                detected_conflict.conflict_kind
+                USING ERRCODE = '40001';
+        END IF;
+    END IF;
 
     pk_cols_quoted := (SELECT string_agg(quote_ident(col), ', ') FROM unnest(p_pk_cols) col);
     pk_join_condition := (SELECT string_agg(format('c.%I = b.%I', col, col), ' AND ') FROM unnest(p_pk_cols) col);
@@ -811,6 +1363,15 @@ BEGIN
         WHERE c._cow_deleted = TRUE AND %s
     $sql$, qual_base, pk_cols_quoted, qual_changes, pk_cols_quoted, pk_join_condition)
     USING p_session, p_operation_ids;
+
+    PERFORM agentcow._cow_rebase_after_commit(
+        p_schema,
+        p_base_table,
+        p_pk_cols,
+        p_session,
+        p_operation_ids,
+        true
+    );
 END;
 $$;
 """
@@ -863,7 +1424,8 @@ CREATE OR REPLACE FUNCTION agentcow.commit_cow(
     p_base_table      text,
     p_pk_cols         text[],
     p_session         uuid,
-    p_operation_ids   uuid[] DEFAULT NULL
+    p_operation_ids   uuid[] DEFAULT NULL,
+    p_conflict_policy text DEFAULT 'error'
 )
 RETURNS void
 LANGUAGE plpgsql
@@ -875,8 +1437,22 @@ BEGIN
     PERFORM agentcow._cow_require_cow_table(p_schema, p_base_table);
     PERFORM agentcow._cow_require_primary_key(p_schema, p_base_table, p_pk_cols);
 
-    PERFORM agentcow.commit_cow_upsert(p_schema, p_base_table, p_pk_cols, p_session, p_operation_ids);
-    PERFORM agentcow.commit_cow_delete(p_schema, p_base_table, p_pk_cols, p_session, p_operation_ids);
+    PERFORM agentcow.commit_cow_upsert(
+        p_schema,
+        p_base_table,
+        p_pk_cols,
+        p_session,
+        p_operation_ids,
+        p_conflict_policy
+    );
+    PERFORM agentcow.commit_cow_delete(
+        p_schema,
+        p_base_table,
+        p_pk_cols,
+        p_session,
+        p_operation_ids,
+        p_conflict_policy
+    );
     PERFORM agentcow.commit_cow_cleanup(p_schema, p_base_table, p_session, p_operation_ids);
 END;
 $$;

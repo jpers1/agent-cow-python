@@ -20,6 +20,7 @@ COW_FUNCTION_NAMES = (
     "commit_cow_cleanup",
     "discard_cow",
     "teardown_cow",
+    "get_cow_conflicts",
 )
 
 
@@ -72,6 +73,13 @@ def _to_uuid_array(uuids: list[str | uuid.UUID]) -> str:
         return "ARRAY[]::uuid[]"
     vals = ",".join(_quote_literal(str(_validate_uuid(u))) for u in uuids)
     return f"ARRAY[{vals}]::uuid[]"
+
+
+def _conflict_policy_literal(policy: str) -> str:
+    """Validate and quote a public conflict-policy value."""
+    if policy not in {"error", "overwrite"}:
+        raise ValueError("conflict_policy must be 'error' or 'overwrite'")
+    return _quote_literal(policy)
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +273,20 @@ def list_enabled_cow_tables_sql() -> str:
         "EXISTS(SELECT 1 FROM information_schema.columns cols "
         "WHERE cols.table_schema = changes.table_schema "
         "AND cols.table_name = changes.table_name "
-        "AND cols.column_name = '_cow_order') AS has_order "
+        "AND cols.column_name = '_cow_order') AS has_order, "
+        "(SELECT COUNT(*) = 3 AND bool_and(CASE baseline_cols.column_name "
+        "WHEN '_cow_base_exists' THEN baseline_cols.data_type = 'boolean' "
+        "AND baseline_cols.is_nullable = 'NO' "
+        "WHEN '_cow_base_row' THEN baseline_cols.data_type = 'jsonb' "
+        "AND baseline_cols.is_nullable = 'YES' "
+        "WHEN '_cow_base_schema' THEN baseline_cols.data_type = 'jsonb' "
+        "AND baseline_cols.is_nullable = 'NO' ELSE false END) "
+        "FROM information_schema.columns baseline_cols "
+        "WHERE baseline_cols.table_schema = changes.table_schema "
+        "AND baseline_cols.table_name = changes.table_name "
+        "AND baseline_cols.column_name IN ("
+        "'_cow_base_exists', '_cow_base_row', '_cow_base_schema'"
+        ")) AS has_conflict_baseline "
         "FROM information_schema.tables changes "
         "WHERE changes.table_type = 'BASE TABLE' "
         "AND right(changes.table_name, 8) = '_changes' "
@@ -316,6 +337,7 @@ def commit_cow_session_sql(
     base_table: str,
     pk_cols: list[str],
     session_id: str | uuid.UUID,
+    conflict_policy: str = "error",
 ) -> str:
     """SQL to commit all COW changes for a session on one table."""
     return (
@@ -323,7 +345,9 @@ def commit_cow_session_sql(
         f"{_quote_literal(schema)}, "
         f"{_quote_literal(base_table)}, "
         f"{_to_text_array(pk_cols)}, "
-        f"{_to_uuid(session_id)})"
+        f"{_to_uuid(session_id)}, "
+        "NULL::uuid[], "
+        f"{_conflict_policy_literal(conflict_policy)})"
     )
 
 
@@ -333,6 +357,7 @@ def commit_cow_upsert_sql(
     pk_cols: list[str],
     session_id: str | uuid.UUID,
     operation_ids: list[str | uuid.UUID] | None = None,
+    conflict_policy: str = "error",
 ) -> str:
     """SQL to apply the upsert phase of a COW commit for one table.
 
@@ -340,18 +365,15 @@ def commit_cow_upsert_sql(
     subsequent calls. Used by schema-level commits to phase inserts
     and deletes across tables in FK dependency order.
     """
-    ops = (
-        f"{_to_uuid_array(operation_ids)}"
-        if operation_ids
-        else "NULL::uuid[]"
-    )
+    ops = f"{_to_uuid_array(operation_ids)}" if operation_ids else "NULL::uuid[]"
     return (
         f"SELECT {_internal_function('commit_cow_upsert')}("
         f"{_quote_literal(schema)}, "
         f"{_quote_literal(base_table)}, "
         f"{_to_text_array(pk_cols)}, "
         f"{_to_uuid(session_id)}, "
-        f"{ops})"
+        f"{ops}, "
+        f"{_conflict_policy_literal(conflict_policy)})"
     )
 
 
@@ -361,20 +383,18 @@ def commit_cow_delete_sql(
     pk_cols: list[str],
     session_id: str | uuid.UUID,
     operation_ids: list[str | uuid.UUID] | None = None,
+    conflict_policy: str = "error",
 ) -> str:
     """SQL to apply the delete phase of a COW commit for one table."""
-    ops = (
-        f"{_to_uuid_array(operation_ids)}"
-        if operation_ids
-        else "NULL::uuid[]"
-    )
+    ops = f"{_to_uuid_array(operation_ids)}" if operation_ids else "NULL::uuid[]"
     return (
         f"SELECT {_internal_function('commit_cow_delete')}("
         f"{_quote_literal(schema)}, "
         f"{_quote_literal(base_table)}, "
         f"{_to_text_array(pk_cols)}, "
         f"{_to_uuid(session_id)}, "
-        f"{ops})"
+        f"{ops}, "
+        f"{_conflict_policy_literal(conflict_policy)})"
     )
 
 
@@ -385,11 +405,7 @@ def commit_cow_cleanup_sql(
     operation_ids: list[str | uuid.UUID] | None = None,
 ) -> str:
     """SQL to clean up the changes table and dirty-tables entry after a commit."""
-    ops = (
-        f"{_to_uuid_array(operation_ids)}"
-        if operation_ids
-        else "NULL::uuid[]"
-    )
+    ops = f"{_to_uuid_array(operation_ids)}" if operation_ids else "NULL::uuid[]"
     return (
         f"SELECT {_internal_function('commit_cow_cleanup')}("
         f"{_quote_literal(schema)}, "
@@ -508,6 +524,7 @@ def commit_cow_operations_sql(
     pk_cols: list[str],
     session_id: str | uuid.UUID,
     operation_ids: list[str | uuid.UUID],
+    conflict_policy: str = "error",
 ) -> str:
     """SQL to commit specific operations from a COW session to the base table."""
     return (
@@ -516,7 +533,8 @@ def commit_cow_operations_sql(
         f"{_quote_literal(base_table)}, "
         f"{_to_text_array(pk_cols)}, "
         f"{_to_uuid(session_id)}, "
-        f"{_to_uuid_array(operation_ids)})"
+        f"{_to_uuid_array(operation_ids)}, "
+        f"{_conflict_policy_literal(conflict_policy)})"
     )
 
 
@@ -560,6 +578,26 @@ def get_operation_dependencies_sql(
     return (
         f"SELECT depends_on, operation_id FROM {_internal_function('get_cow_dependencies')}("
         f"{_quote_literal(schema)}, {_to_uuid(session_id)})"
+    )
+
+
+def get_cow_conflicts_sql(
+    schema: str,
+    base_table: str,
+    pk_cols: list[str],
+    session_id: str | uuid.UUID,
+    operation_ids: list[str | uuid.UUID] | None = None,
+) -> str:
+    """Inspect current row-level conflicts through the controlled API."""
+    ops = _to_uuid_array(operation_ids) if operation_ids else "NULL::uuid[]"
+    return (
+        "SELECT table_name, primary_key, conflict_kind, operation_id, cow_order "
+        f"FROM {_internal_function('get_cow_conflicts')}("
+        f"{_quote_literal(schema)}, "
+        f"{_quote_literal(base_table)}, "
+        f"{_to_text_array(pk_cols)}, "
+        f"{_to_uuid(session_id)}, "
+        f"{ops}, NULL::boolean)"
     )
 
 

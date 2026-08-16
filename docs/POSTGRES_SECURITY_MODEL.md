@@ -17,7 +17,7 @@ database only when it must create the control or application schema.
 | --- | --- | --- |
 | Setup / owner | Deploy functions, enable or disable COW, own protected objects, apply hardening | Delegation to an untrusted request path |
 | Runtime | `SELECT`, `INSERT`, `UPDATE`, and `DELETE` through enabled COW views | Direct base/change/registry access, sequence access, management functions, schema object replacement |
-| Reviewer | Read COW views for a selected session; use controlled inspection, dependency, commit, and discard functions | Direct base/change/registry DML, runtime view DML, setup, teardown, object replacement |
+| Reviewer | Read COW views for a selected session; use controlled operation, dependency, conflict, commit, and discard functions | Direct base/change/registry DML, runtime view DML, setup, teardown, object replacement |
 
 `PUBLIC` receives no access to the `agentcow` schema and no function execute
 authority. Generated trigger functions also revoke `PUBLIC EXECUTE`.
@@ -65,7 +65,7 @@ Hardening performs these operations for the explicitly listed roles:
   `_cow_operation_order_seq`;
 - grants runtime CRUD only on the COW views;
 - grants reviewers `SELECT` on the views and `EXECUTE` only on controlled
-  inspection, dependency, commit, and discard functions;
+  inspection, dependency, conflict, commit, and discard functions;
 - removes runtime and reviewer `CREATE` on the application and control
   schemas;
 - removes `PUBLIC` access to managed internal objects and functions;
@@ -168,6 +168,67 @@ custom GUC, or bypass wrapper validation. H03 still makes missing/reset write
 context fail closed, but the application process and its database credentials
 remain inside the trusted boundary.
 
+## Conflict and promotion contract
+
+Conflict baselines are captured automatically by the generated write trigger
+when a session first changes a primary key. The baseline contains:
+
+- whether the canonical row existed;
+- the complete canonical row represented as `jsonb`;
+- a signature of the canonical table's visible columns.
+
+Later operations in that session retain the first baseline even when they use
+different operation UUIDs. This is first-touch row detection, not a database
+snapshot at session creation and not a substitute for an application's
+optional session-wide revision policy.
+
+Reviewers may inspect current conflicts without internal-table access:
+
+```python
+from agentcow.postgres import get_cow_conflicts
+
+conflicts = await get_cow_conflicts(
+    reviewer,
+    trusted_session_id,
+    schema="content",
+)
+```
+
+The result identifies the table, primary key, latest relevant operation and
+one of `BASE_ROW_CHANGED`, `BASE_ROW_DELETED`, `BASE_ROW_CREATED`, or
+`BASE_SCHEMA_CHANGED`. Inspection is advisory. It does not authorize a later
+commit and cannot replace the check inside promotion.
+
+Commit uses `conflict_policy="error"` by default. Each per-table promotion
+locks canonical and pending state against concurrent canonical DML, validates
+the stored baseline, and mutates while the lock is held. A conflict raises
+SQLSTATE `40001`; canonical state and pending session rows are preserved when
+the caller rolls back the failed transaction. Historical last-writer-wins
+behavior is available only through the explicit
+`conflict_policy="overwrite"` compatibility option.
+
+Selective commit accepts only a causal operation prefix for each affected
+primary key. After accepting a prefix, later pending operations from the same
+session are rebased to the newly accepted canonical state. Selective discard
+does not refresh their baseline. A base-table schema change while work is
+pending produces a conservative schema conflict.
+
+The comparison detects current-state divergence, not every mutation event. If
+canonical row and schema state change and then return exactly to the stored
+baseline, promotion is allowed. The table lock also means conflicting
+promotion serializes canonical writers at table granularity; this favors a
+generic correctness guarantee over maximum writer concurrency.
+
+Until H07, the reviewer owns the outer promotion transaction. A schema-wide
+commit must run in one explicit transaction if the caller requires
+all-or-nothing behavior across tables.
+
+When upgrading an existing hardened schema to H06, first remove pending work
+using the previous version. Deploy H06 and rerun `harden_cow_schema(...)` in
+the same administrative transaction. The commit function signatures change to
+carry the explicit policy, and the reviewer must receive the new controlled
+grants before traffic resumes.
+
 ## Patterns not recommended for hardened deployments
 
 - Accepting an external request's session UUID as database identity without a
@@ -181,6 +242,6 @@ remain inside the trusted boundary.
 The complete public asyncpg example is
 [`asyncpg_safe_session_example.py`](../agentcow/postgres/examples/asyncpg_safe_session_example.py).
 It demonstrates setup, effective-privilege validation, runtime pool use,
-server-owned session resolution, and reviewer-only promotion. Conflict checks
-remain an application responsibility until H06, and the reviewer explicitly
-owns its transaction until H07.
+server-owned session resolution, conflict inspection, and reviewer-only
+conflict-safe promotion. The reviewer explicitly owns its transaction until
+H07.

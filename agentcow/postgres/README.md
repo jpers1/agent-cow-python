@@ -126,6 +126,7 @@ reviewer credentials:
 from agentcow.postgres import (
     commit_cow_session_schema,
     discard_cow_session_schema,
+    get_cow_conflicts,
     get_operation_dependencies,
     get_session_operations,
 )
@@ -140,8 +141,11 @@ try:
         dependencies = await get_operation_dependencies(
             reviewer, trusted_session_id, schema="content"
         )
+        conflicts = await get_cow_conflicts(
+            reviewer, trusted_session_id, schema="content"
+        )
 
-        if application_or_human_approved:
+        if application_or_human_approved and not conflicts:
             await commit_cow_session_schema(
                 reviewer, trusted_session_id, schema="content"
             )
@@ -153,11 +157,58 @@ finally:
     await reviewer_connection.close()
 ```
 
-The runtime role cannot inspect internal tables or promote changes. H06 will
-address built-in concurrent-conflict detection; current applications must
-apply their accepted conflict policy before authorizing promotion. H07 will
-provide a higher-level promotion transaction API, so the reviewer example
-owns its connection and explicit transaction directly for now.
+The runtime role cannot inspect internal tables or promote changes. Conflict
+inspection is useful for review, but commit independently enforces the stored
+first-touch baseline while blocking concurrent canonical DML. The reviewer
+example owns its connection and explicit transaction directly until H07 adds
+a higher-level promotion transaction API.
+
+## Optimistic conflicts
+
+The first time a session modifies a primary key, agent-cow records whether the
+canonical row existed, its complete row state, and the base-table column
+signature. Further operations on that key retain this original baseline. This
+is row-level first-touch detection, not a snapshot taken when a session UUID is
+created.
+
+Commit is conflict-safe by default. If the canonical row is changed, deleted,
+or created after first touch, or the relevant table schema changes, promotion
+raises PostgreSQL SQLSTATE `40001`. Canonical state is not overwritten and the
+pending rows remain available after the failed transaction is rolled back.
+`get_cow_conflicts(...)` returns structured conflict details for reviewer UIs,
+but is advisory; promotion always validates again under a table lock.
+
+```python
+conflicts = await get_cow_conflicts(
+    reviewer, trusted_session_id, schema="content"
+)
+if not conflicts:
+    await commit_cow_session_schema(
+        reviewer, trusted_session_id, schema="content"
+    )
+```
+
+The comparison is current-state based. A canonical row that changes and then
+returns exactly to its baseline is not treated as historically changed. An
+application may layer a coarser session-wide revision gate on top when that is
+its desired policy.
+
+`conflict_policy="overwrite"` is an explicit compatibility option for legacy
+last-writer-wins promotion. Hardened integrations should retain the default
+`"error"` policy.
+
+Selective commit accepts only a causal prefix for each key and rebases later
+pending operations onto the state just accepted by that same session.
+Selective discard preserves the original baseline. Schema-wide promotion must
+remain inside one explicit reviewer transaction until H07 supplies a
+transaction-owning promotion scope.
+
+An empty pre-H06 changes table upgrades automatically. Pending pre-H06 rows
+cannot be assigned a truthful first-touch baseline, so deployment refuses the
+upgrade until they are committed or discarded using the previous version.
+After deploying into an existing hardened schema, rerun
+`harden_cow_schema(...)` in the same administrative transaction to apply the
+new reviewer function grants.
 
 ## How It Works
 
@@ -254,6 +305,7 @@ independently implements every lifecycle guarantee.
 |----------|-------------|
 | `get_session_operations(executor, session_id, *, schema="public")` | List all operation UUIDs in a session |
 | `get_operation_dependencies(executor, session_id, *, schema="public")` | Get `(depends_on, operation_id)` pairs for a session |
+| `get_cow_conflicts(executor, session_id, *, schema="public", operation_ids=None)` | Inspect structured first-touch conflicts through the controlled reviewer API |
 | `set_visible_operations(executor, operation_ids)` | Filter which operations' changes are visible in subsequent reads |
 | `get_cow_status(executor, *, schema="public")` | Get COW status: deployed functions, enabled tables, changes tables |
 | `is_cow_enabled(executor, config, *, schema="public")` | Check if COW is both requested and properly configured |
@@ -262,10 +314,10 @@ independently implements every lifecycle guarantee.
 
 | Function | Description |
 |----------|-------------|
-| `commit_cow_session(executor, table_name, session_id, *, pk_cols=None, schema="public")` | Commit all session changes to the base table |
-| `commit_cow_session_schema(executor, session_id, *, schema="public", defer_fk_constraints=False)` | Commit every dirty table for the session. Orders by FK dependency by default — see [FK constraints](#fk-constraints-and-multi-table-commits) |
+| `commit_cow_session(executor, table_name, session_id, *, pk_cols=None, schema="public", conflict_policy="error")` | Commit all session changes with conflict checking by default; `"overwrite"` explicitly restores last-writer-wins compatibility |
+| `commit_cow_session_schema(executor, session_id, *, schema="public", defer_fk_constraints=False, conflict_policy="error")` | Commit every dirty table with conflict checking. Orders by FK dependency by default — see [FK constraints](#fk-constraints-and-multi-table-commits) |
 | `discard_cow_session(executor, table_name, session_id, *, schema="public")` | Discard all session changes |
-| `commit_cow_operations(executor, table_name, session_id, operation_ids, *, pk_cols=None, schema="public")` | Commit specific operations (cherry-pick) |
+| `commit_cow_operations(executor, table_name, session_id, operation_ids, *, pk_cols=None, schema="public", conflict_policy="error")` | Commit a causally valid operation prefix with conflict checking |
 | `discard_cow_operations(executor, table_name, session_id, operation_ids, *, schema="public")` | Discard specific operations |
 
 ### Teardown
