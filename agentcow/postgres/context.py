@@ -34,7 +34,9 @@ def build_cow_variable_statements(
 ) -> list[str]:
     """Build SQL statements for setting COW session variables.
 
-    Returns a list of ``SET LOCAL ...`` strings ready for any driver.
+    Returns a list of ``SET LOCAL ...`` strings ready for any driver. This is
+    a low-level helper: the caller must already own one explicit transaction
+    on one physical connection and must validate and clean pooled state.
     """
     statements = [f"SET LOCAL app.session_id = '{_validate_uuid(agent_session_id)}'"]
 

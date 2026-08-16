@@ -83,17 +83,57 @@ SET LOCAL app.session_id = '...';
 SET LOCAL app.operation_id = '...';
 ```
 
-Use one explicit database transaction per request:
+The preferred downstream API owns this contract for asyncpg connections/pools
+and SQLAlchemy async engines/connections/sessions/factories:
+
+```python
+from agentcow.postgres import asyncpg_cow_session
+
+async with asyncpg_cow_session(
+    application_pool,
+    session_id=server_selected_session_id,
+) as cow:
+    await cow.execute(
+        "INSERT INTO content.pages (id, title) VALUES (1, 'Draft')"
+    )
+    await cow.set_operation()  # select a new generated logical operation
+    await cow.execute(
+        "UPDATE content.pages SET title = 'Revised' WHERE id = 1"
+    )
+```
+
+The equivalent `sqlalchemy_cow_session(...)` scope accepts an async engine,
+connection, session, or `async_sessionmaker`; its `cow.native` property exposes
+the owned SQLAlchemy object for ORM work. A normal scope exit commits the
+request transaction. Exceptions, cancellation, or `await cow.rollback()` roll
+it back.
+
+Each high-level scope enforces:
 
 ```text
 acquire connection
   -> begin transaction
-  -> select server-owned session and operation IDs
-  -> SET LOCAL both values
+  -> reject stale session, operation, or visibility context
+  -> SET LOCAL server-owned session and operation IDs
+  -> validate the applied values from PostgreSQL
   -> application CRUD through COW views
+  -> validate context before library-controlled statements and scope exit
   -> commit or roll back
+  -> verify no usable COW context remains
   -> return connection
 ```
+
+Passing an already transactional connection is rejected because a nested
+savepoint cannot provide the required physical-connection lifetime boundary.
+If `operation_id` is omitted, the high-level API generates a UUID. Multiple
+logical actions may use `await cow.set_operation(...)`; visibility changes use
+`await cow.set_visible_operations(...)` and are applied and verified as local
+settings.
+
+`Executor`, `apply_cow_variables(...)`, and the statement builders remain
+low-level APIs. They cannot prove connection identity or transaction lifetime,
+so callers using them must enforce the entire contract themselves. Raw `SET
+LOCAL` in autocommit mode is unsupported for safe COW writes.
 
 Missing, reset, expired, or malformed write context raises an error. A normal
 `SELECT` without context continues to show canonical state. The historical
@@ -112,3 +152,10 @@ never be exposed to an agent. The gateway must derive `session_id` and
 `operation_id` from server-owned state; an external caller must not choose
 arbitrary values. Capability-token lookup and request authentication belong in
 SLAIF Agent-State, not this generic library.
+
+`CowSession.execute()` detects unexpected context mutation before its next
+statement, and the scope checks again before commit. `cow.native` cannot make
+arbitrary SQL trustworthy: code with direct access can issue `RESET`, change a
+custom GUC, or bypass wrapper validation. H03 still makes missing/reset write
+context fail closed, but the application process and its database credentials
+remain inside the trusted boundary.

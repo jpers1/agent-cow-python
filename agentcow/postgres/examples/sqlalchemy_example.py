@@ -3,20 +3,18 @@ SQLAlchemy integration example for agent-cow.
 
 This file serves two purposes:
 
-    1. Production-ready utilities for integrating agent-cow with SQLAlchemy,
-       covering the full gap between the driver-agnostic library API and what
-       a real deployment needs. Each section is standalone -- copy what you need.
+    1. The production runtime entry point ``sqlalchemy_cow_session`` together
+       with illustrative low-level administration and review utilities.
 
     2. A runnable demo (at the bottom) that shows session isolation, commit,
        and discard using those utilities.
 
 Sections:
-    1. Executor adapter           -- wraps AsyncSession for agent-cow
-    2. Session listener            -- re-applies SET LOCAL after every commit
-    3. COW session context manager -- recommended entry point
-    4. Model-aware enable/disable  -- topological FK ordering
-    5. Schema-level commit/discard -- auto-detects dirty tables
-    6. Runnable demo               -- python -m agentcow.postgres.examples.sqlalchemy_example
+    1. Executor adapter           -- low-level administrative integration
+    2. Safe COW session scope     -- recommended runtime entry point
+    3. Model-aware enable/disable -- topological FK ordering
+    4. Schema commit/discard      -- auto-detects dirty tables
+    5. Runnable demo              -- python -m agentcow.postgres.examples.sqlalchemy_example
 
 Requirements:
     uv add agent-cow sqlalchemy asyncpg
@@ -28,11 +26,10 @@ from __future__ import annotations
 import asyncio
 import traceback
 import uuid
-from contextlib import asynccontextmanager
 from graphlib import TopologicalSorter
-from typing import Any, AsyncIterator
+from typing import Any
 
-from sqlalchemy import Column, ForeignKey, Integer, String, event, inspect, select, text
+from sqlalchemy import Column, ForeignKey, Integer, String, inspect, select, text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -42,14 +39,13 @@ from sqlalchemy.orm import DeclarativeBase, relationship
 
 from agentcow.postgres import (
     Executor,
-    apply_cow_variables,
-    build_cow_variable_statements,
     commit_cow_session,
     commit_cow_operations,
     deploy_cow_functions,
     disable_cow,
     enable_cow,
     get_cow_status,
+    sqlalchemy_cow_session,
 )
 
 DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost/agent_cow_example"
@@ -114,78 +110,16 @@ assert isinstance(SAExecutor.__new__(SAExecutor), Executor)
 
 
 # =============================================================================
-# 2. Session listener
+# 2. Safe COW session scope
 # =============================================================================
-# SET LOCAL is transaction-scoped in PostgreSQL. After commit(), the session
-# variables are lost. This listener re-applies them on every new transaction.
-# =============================================================================
-
-
-def _apply_cow_variables_sync(
-    connection,
-    session_id: uuid.UUID,
-    operation_id: uuid.UUID | None = None,
-    visible_operations: list[uuid.UUID] | None = None,
-) -> None:
-    for stmt in build_cow_variable_statements(
-        session_id, operation_id, visible_operations
-    ):
-        connection.execute(text(stmt))
-
-
-def setup_cow_session_listener(
-    session: AsyncSession,
-    session_id: uuid.UUID,
-    operation_id: uuid.UUID | None = None,
-    visible_operations: list[uuid.UUID] | None = None,
-) -> None:
-    """Attach an event listener that re-sets COW variables after every commit.
-
-    Call this once per session. Every subsequent transaction on this session
-    will automatically have the COW variables set.
-    """
-
-    @event.listens_for(session.sync_session, "after_begin")
-    def _after_begin(sync_session, transaction, connection):
-        _apply_cow_variables_sync(
-            connection, session_id, operation_id, visible_operations
-        )
+# ``sqlalchemy_cow_session`` owns one AsyncSession/connection and one explicit
+# transaction. It applies and validates SET LOCAL context and commits or rolls
+# back before releasing the connection. Do not commit inside the scope: a
+# request is deliberately one transaction.
 
 
 # =============================================================================
-# 3. COW session context manager
-# =============================================================================
-
-
-@asynccontextmanager
-async def cow_session(
-    session_maker: async_sessionmaker[AsyncSession],
-    session_id: uuid.UUID,
-    operation_id: uuid.UUID | None = None,
-    visible_operations: list[uuid.UUID] | None = None,
-) -> AsyncIterator[AsyncSession]:
-    """Context manager that yields a SQLAlchemy session with COW variables set.
-
-    The session listener ensures variables survive across commits. This is
-    the recommended way to use agent-cow with SQLAlchemy::
-
-        async with cow_session(maker, session_id, op_id) as session:
-            session.add(User(name="Bessie"))
-            await session.commit()
-            # COW variables are still active here
-            users = await session.execute(select(User))
-    """
-    async with session_maker() as session:
-        ex = SAExecutor(session)
-        await apply_cow_variables(ex, session_id, operation_id, visible_operations)
-        setup_cow_session_listener(
-            session, session_id, operation_id, visible_operations
-        )
-        yield session
-
-
-# =============================================================================
-# 4. Model-aware enable/disable with FK ordering
+# 3. Model-aware enable/disable with FK ordering
 # =============================================================================
 
 
@@ -250,7 +184,7 @@ async def disable_cow_for_models(
 
 
 # =============================================================================
-# 5. Schema-level commit/discard with dirty-table detection
+# 4. Schema-level commit/discard with dirty-table detection
 # =============================================================================
 
 
@@ -375,7 +309,7 @@ async def discard_cow_session_all(
 
 
 # =============================================================================
-# 6. Runnable demo
+# 5. Runnable demo
 # =============================================================================
 
 
@@ -407,21 +341,23 @@ async def demo_session_isolation():
     sid_a = uuid.uuid4()
     sid_b = uuid.uuid4()
 
-    async with cow_session(session_maker, sid_a, uuid.uuid4()) as session:
+    async with sqlalchemy_cow_session(session_maker, session_id=sid_a) as cow:
+        session = cow.native
         session.add(User(name="Bessie", email="bessie@greenacres.farm"))
-        await session.commit()
         print(f"  Session A created Bessie")
 
-    async with cow_session(session_maker, sid_b, uuid.uuid4()) as session:
+    async with sqlalchemy_cow_session(session_maker, session_id=sid_b) as cow:
+        session = cow.native
         session.add(User(name="Clyde", email="clyde@greenacres.farm"))
-        await session.commit()
         print(f"  Session B created Clyde")
 
-    async with cow_session(session_maker, sid_a, uuid.uuid4()) as session:
+    async with sqlalchemy_cow_session(session_maker, session_id=sid_a) as cow:
+        session = cow.native
         users = (await session.execute(select(User))).scalars().all()
         print(f"  Session A sees: {[u.name for u in users]}")
 
-    async with cow_session(session_maker, sid_b, uuid.uuid4()) as session:
+    async with sqlalchemy_cow_session(session_maker, session_id=sid_b) as cow:
+        session = cow.native
         users = (await session.execute(select(User))).scalars().all()
         print(f"  Session B sees: {[u.name for u in users]}")
 
@@ -450,11 +386,15 @@ async def demo_cross_table():
     sid = uuid.uuid4()
     op_id = uuid.uuid4()
 
-    async with cow_session(session_maker, sid, op_id) as session:
+    async with sqlalchemy_cow_session(
+        session_maker,
+        session_id=sid,
+        operation_id=op_id,
+    ) as cow:
+        session = cow.native
         result = await session.execute(select(User).where(User.name == "Bessie"))
         bessie = result.scalar_one()
         session.add(Project(owner_id=bessie.id, title="Pasture Expansion"))
-        await session.commit()
         print(f"  Created project for Bessie in COW session")
 
     async with session_maker() as session:

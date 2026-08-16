@@ -75,8 +75,12 @@ Alignment is an open problem in AI safety, and [misalignment during agent execut
 ## Quick Example (PostgreSQL)
 
 ```python
-import uuid
-from agentcow.postgres import deploy_cow_functions, enable_cow_schema, apply_cow_variables, commit_cow_session
+from agentcow.postgres import (
+    asyncpg_cow_session,
+    deploy_cow_functions,
+    enable_cow_schema,
+    commit_cow_session,
+)
 
 # Wrap any async PostgreSQL driver — asyncpg, SQLAlchemy, psycopg, etc.
 class MyExecutor:
@@ -91,13 +95,16 @@ executor = MyExecutor(conn)
 await deploy_cow_functions(executor)
 await enable_cow_schema(executor)
 
-# Agent session — all writes are isolated
-session_id = uuid.uuid4()
-await apply_cow_variables(executor, session_id, operation_id=uuid.uuid4())
-await executor.execute("INSERT INTO users (name) VALUES ('Bessie')")
+# Agent request — trusted application code supplies the server-selected UUID.
+# One pooled connection and one explicit transaction are managed automatically.
+async with asyncpg_cow_session(
+    application_pool,
+    session_id=server_selected_session_id,
+) as cow:
+    await cow.execute("INSERT INTO users (name) VALUES ('Bessie')")
 
-# Review, then commit or discard
-await commit_cow_session(executor, "users", session_id)
+# Review separately with the configured reviewer role, then commit or discard.
+await commit_cow_session(reviewer_executor, "users", server_selected_session_id)
 ```
 
 See the [PostgreSQL docs](./agentcow/postgres/) for the full guide: driver adapters, schema-wide setup, selective commit, web framework integration, and the complete API reference.
@@ -117,7 +124,7 @@ See the [PostgreSQL docs](./agentcow/postgres/) for the full guide: driver adapt
 
 ### Operation-Level Functions
 
-- `apply_cow_variables(executor, session_id, operation_id)` — Set COW session variables
+- `apply_cow_variables(executor, session_id, operation_id)` — Low-level caller-managed transaction helper
 - `get_session_operations(executor, session_id)` — List all operations in a session
 - `get_operation_dependencies(executor, session_id)` — Get operation dependency graph
 - `commit_cow_operations(executor, table_name, session_id, operation_ids)` — Commit specific operations
@@ -125,10 +132,15 @@ See the [PostgreSQL docs](./agentcow/postgres/) for the full guide: driver adapt
 
 ### Session Management
 
+- `asyncpg_cow_session(connection_or_pool, session_id=...)` — Recommended transaction-owning asyncpg request scope
+- `sqlalchemy_cow_session(engine_or_session, session_id=...)` — Equivalent optional SQLAlchemy async scope
 - `CowPostgresConfig` — Dataclass for COW configuration
 - `build_cow_variable_statements(session_id, operation_id)` — Build SET LOCAL SQL statements
 
-For parsing COW configuration from HTTP request headers (e.g. in FastAPI/Django/Flask middleware), see [`agentcow/examples/header_parsing_example.py`](./agentcow/examples/header_parsing_example.py).
+Low-level helpers require caller-managed connection and transaction safety.
+The historical HTTP-header parser is retained as a compatibility example, not
+as a production authorization boundary; applications must resolve untrusted
+transport credentials to server-owned session UUIDs.
 
 ## Development
 

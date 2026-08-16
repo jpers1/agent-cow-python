@@ -31,6 +31,14 @@ from .context import (
     CowPostgresConfig,
     build_cow_variable_statements,
 )
+from .safe_session import (
+    CowSession,
+    CowSessionError,
+    CowSessionStateError,
+    CowSessionContextError,
+    asyncpg_cow_session,
+    sqlalchemy_cow_session,
+)
 from .types import (
     CHANGE_TABLE_RESERVED_FIELDS,
     CowWrite,
@@ -64,6 +72,12 @@ __all__ = [
     "get_cow_status",
     "CowPostgresConfig",
     "build_cow_variable_statements",
+    "CowSession",
+    "CowSessionError",
+    "CowSessionStateError",
+    "CowSessionContextError",
+    "asyncpg_cow_session",
+    "sqlalchemy_cow_session",
     "CHANGE_TABLE_RESERVED_FIELDS",
     "CowWrite",
 ]
