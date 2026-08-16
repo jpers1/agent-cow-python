@@ -6,13 +6,14 @@ The downstream `0.2.0rc1` release candidate is being evaluated for use as a
 dependency of the future SLAIF Agent-State repository. The final H10 gate is:
 
 ```text
-PENDING_FINAL_CLEAN_CLONE_AND_CI
+READY_WITH_DOCUMENTED_LIMITATIONS
 ```
 
 This is a bounded dependency-readiness assessment, not formal verification,
-certification, or a claim of universal production security. The status above
-must be replaced by one of the work-order readiness classifications only after
-the clean-clone and branch CI evidence is complete.
+certification, or a claim of universal production security. It means the fork
+is ready to be evaluated as a pinned dependency of the future SLAIF
+Agent-State repository under the role, transaction, migration, support, and
+trust-boundary limitations documented here.
 
 ## Provenance and release identity
 
@@ -153,9 +154,9 @@ Evidence gathered on 2026-08-16:
 | H01/H05/intermediate migration regressions | PASSED — 5 passed, 0 failed, 0 skipped |
 | Hardened lifecycle and conflict demonstration | PASSED — accepted changes promoted, discarded changes stayed non-canonical, conflict preserved canonical and pending state |
 | Multi-table failure demonstration | PASSED — later constraint failure rolled back prior mutation, preserved pending state, and left the connection reusable |
-| Clean-clone dependency policy and full suite | PENDING |
-| Python 3.10/3.12/3.14 wheel, sdist, install, and archive inspection | PENDING |
-| GitHub Actions dependency, ten matrix, and three package jobs | PENDING |
+| Clean-clone dependency policy and full suite | PASSED — fresh clone and fresh uv cache; policy approved 15 distributions; 150 passed, 0 failed, 0 skipped on Python 3.12.3/PostgreSQL 18.6 |
+| Python 3.10/3.12/3.14 wheel, sdist, install, and archive inspection | PASSED — each isolated wheel reported `0.2.0rc1`; inspected wheel had 48 entries and sdist had 71; no forbidden names or obvious key/credential content |
+| GitHub Actions dependency, ten matrix, and three package jobs | PASSED — 14 of 14 jobs on code-bearing commit `225325cdf9542927a19dfc0b14c67a43d3305c6e` in [run 31945072011](https://github.com/jpers1/agent-cow-python/actions/runs/31945072011) |
 
 The matrix uses official `postgres:14.24`, `15.19`, `16.15`, `17.11`, and
 `18.6` images and patch-pinned Python 3.10.21, 3.11.16, 3.12.14, 3.13.15, and
