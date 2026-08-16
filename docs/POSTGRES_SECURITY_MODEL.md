@@ -159,7 +159,7 @@ Database credentials therefore belong to a trusted semantic gateway and must
 never be exposed to an agent. The gateway must derive `session_id` and
 `operation_id` from server-owned state; an external caller must not choose
 arbitrary values. Capability-token lookup and request authentication belong in
-SLAIF Agent-State, not this generic library.
+the integrating application, not this generic library.
 
 `CowSession.execute()` detects unexpected context mutation before its next
 statement, and the scope checks again before commit. `cow.native` cannot make

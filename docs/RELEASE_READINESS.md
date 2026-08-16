@@ -2,18 +2,17 @@
 
 ## Decision
 
-The downstream `0.2.0rc1` release candidate is being evaluated for use as a
-dependency of the future SLAIF Agent-State repository. The final H10 gate is:
+The downstream `0.2.0rc1` release candidate has completed the final H10 gate:
 
 ```text
 READY_WITH_DOCUMENTED_LIMITATIONS
 ```
 
 This is a bounded dependency-readiness assessment, not formal verification,
-certification, or a claim of universal production security. It means the fork
-is ready to be evaluated as a pinned dependency of the future SLAIF
-Agent-State repository under the role, transaction, migration, support, and
-trust-boundary limitations documented here.
+certification, or a claim of universal production security. It means the
+maintained downstream fork is ready for integration as a pinned dependency in
+applications that respect the database-role, transaction, session-identity,
+migration, support, and trust-boundary requirements documented here.
 
 ## Provenance and release identity
 
@@ -39,12 +38,9 @@ preferred integration uses asyncpg 0.31.0; the optional SQLAlchemy async
 adapter is verified with SQLAlchemy 2.0.46. Exact images, patch releases, test
 counts, and durations are in [`SUPPORT_MATRIX.md`](SUPPORT_MATRIX.md).
 
-`agentcow.blob` remains inherited upstream functionality. It is not part of
-the SLAIF Agent-State supported integration target and was not included in the
-H01–H10 PostgreSQL readiness guarantee. This is not a general statement that
-the blob subsystem is broken. The intended SLAIF design instead uses
-application-controlled, session-scoped immutable media and immutable
-content-addressed published objects.
+`agentcow.blob` remains upstream-derived functionality and is outside the
+hardened downstream PostgreSQL support scope assessed by H01–H10. This is not
+a general statement that the blob subsystem is broken.
 
 ## Reconciled hardening state
 
@@ -202,4 +198,5 @@ explicit configuration.
   conservatively when a safe comparison cannot be made.
 - The supported windows are Python 3.10–3.14 and PostgreSQL 14–18; versions
   outside them are not covered by this evidence.
-- The blob subsystem is outside the SLAIF Agent-State integration target.
+- The blob subsystem is outside the hardened downstream PostgreSQL support
+  scope.

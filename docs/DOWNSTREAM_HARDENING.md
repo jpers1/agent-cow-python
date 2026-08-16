@@ -2,9 +2,9 @@
 
 ## Purpose
 
-This maintained fork extends the upstream `agent-cow` library with bounded
-PostgreSQL correctness, isolation, and integration improvements. It remains a
-generic copy-on-write engine and is not the SLAIF Agent-State product.
+This maintained fork extends the upstream `agent-cow` library with PostgreSQL
+correctness, isolation, privilege-boundary, conflict-detection, and
+transaction-safety improvements. It remains a generic copy-on-write library.
 
 The H01–H09 sequence is complete on downstream `main`. Each item was delivered
 through a narrow human-merged pull request with regression evidence and public
@@ -29,12 +29,10 @@ documented correctness boundary.
 
 ## Blob subsystem
 
-The existing blob subsystem remains upstream-derived code but is not currently
-part of the SLAIF Agent-State integration target.
-
-It remains in the repository for upstream compatibility and possible generic
-use. Its inclusion does not make it an approved SLAIF media architecture, and
-this governance change neither modifies nor removes it.
+The existing blob subsystem remains upstream-derived code and is not included
+in the hardened downstream PostgreSQL support scope. It remains in the
+repository for upstream compatibility and possible generic use. This
+hardening sequence neither modifies nor removes it.
 
 ## Compatibility
 

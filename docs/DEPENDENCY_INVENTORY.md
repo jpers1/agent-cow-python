@@ -103,18 +103,18 @@ by the standard PostgreSQL `dev` group:
 
 | Distribution | Version | Relationship | Purpose/path | License/SPDX | Policy |
 | --- | --- | --- | --- | --- | --- |
-| `boto3` | 1.42.76 | Direct `blob` optional | Upstream-derived S3 client | Apache-2.0 | ALLOWED, OUTSIDE SLAIF TARGET |
-| `botocore` | 1.42.76 | Transitive | `boto3 -> botocore` | Apache-2.0 | ALLOWED, OUTSIDE SLAIF TARGET |
-| `jmespath` | 1.1.0 | Transitive | boto3/botocore query support | MIT | ALLOWED, OUTSIDE SLAIF TARGET |
-| `s3transfer` | 0.16.0 | Transitive | `boto3 -> s3transfer` | Apache-2.0 | ALLOWED, OUTSIDE SLAIF TARGET |
-| `python-dateutil` | 2.9.0.post0 | Transitive | `botocore -> python-dateutil` | Apache-2.0 OR BSD-3-Clause | ALLOWED, OUTSIDE SLAIF TARGET |
-| `six` | 1.17.0 | Transitive | `python-dateutil -> six` | MIT | ALLOWED, OUTSIDE SLAIF TARGET |
-| `urllib3` | 2.6.3 | Transitive | `botocore -> urllib3` | MIT | ALLOWED, OUTSIDE SLAIF TARGET |
+| `boto3` | 1.42.76 | Direct `blob` optional | Upstream-derived S3 client | Apache-2.0 | ALLOWED, OUTSIDE HARDENED POSTGRESQL SCOPE |
+| `botocore` | 1.42.76 | Transitive | `boto3 -> botocore` | Apache-2.0 | ALLOWED, OUTSIDE HARDENED POSTGRESQL SCOPE |
+| `jmespath` | 1.1.0 | Transitive | boto3/botocore query support | MIT | ALLOWED, OUTSIDE HARDENED POSTGRESQL SCOPE |
+| `s3transfer` | 0.16.0 | Transitive | `boto3 -> s3transfer` | Apache-2.0 | ALLOWED, OUTSIDE HARDENED POSTGRESQL SCOPE |
+| `python-dateutil` | 2.9.0.post0 | Transitive | `botocore -> python-dateutil` | Apache-2.0 OR BSD-3-Clause | ALLOWED, OUTSIDE HARDENED POSTGRESQL SCOPE |
+| `six` | 1.17.0 | Transitive | `python-dateutil -> six` | MIT | ALLOWED, OUTSIDE HARDENED POSTGRESQL SCOPE |
+| `urllib3` | 2.6.3 | Transitive | `botocore -> urllib3` | MIT | ALLOWED, OUTSIDE HARDENED POSTGRESQL SCOPE |
 
 No blob-test dependency is declared in the supported environment. The
 upstream-derived blob tests remain in the source tree, but their historical
 Moto tooling is not installed or run by the downstream PostgreSQL CI path.
-Blob support is outside the downstream SLAIF PostgreSQL support guarantee.
+Blob support is outside the hardened downstream PostgreSQL support scope.
 
 ## Removed standard-path dependencies
 
