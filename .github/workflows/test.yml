@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   dependency-policy:
-    name: Permissive dependency policy
+    name: Permissive dependency and scope policy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -26,6 +26,7 @@ jobs:
       - run: python -m pip install uv==0.12.5
       - run: uv sync --frozen --group dev
       - run: .venv/bin/python scripts/check_dependency_policy.py
+      - run: .venv/bin/python scripts/check_postgresql_scope.py
       - run: .venv/bin/python scripts/check_release_neutrality.py
       - name: Check migrated test/tooling files
         run: |
@@ -33,6 +34,7 @@ jobs:
             agentcow/postgres/tests/conftest.py \
             agentcow/postgres/tests/test_release_readiness.py \
             scripts/check_dependency_policy.py \
+            scripts/check_postgresql_scope.py \
             scripts/check_release_neutrality.py \
             scripts/test_postgres_matrix.py
           .venv/bin/ruff check \
@@ -41,6 +43,7 @@ jobs:
             agentcow/postgres/tests/test_release_readiness.py \
             agentcow/postgres/tests/test_role_hardening.py \
             scripts/check_dependency_policy.py \
+            scripts/check_postgresql_scope.py \
             scripts/check_release_neutrality.py \
             scripts/test_postgres_matrix.py
 
@@ -166,9 +169,26 @@ jobs:
       - run: uv sync --frozen --group dev
       - run: .venv/bin/python scripts/check_dependency_policy.py
       - run: .venv/bin/python -m build --no-isolation --wheel --sdist
+      - run: test -f dist/agent_cow_postgresql-0.2.0rc1-py3-none-any.whl
 
       - name: Install built wheel in a fresh environment
         run: |
           python -m venv /tmp/agentcow-wheel
           /tmp/agentcow-wheel/bin/python -m pip install dist/*.whl
-          /tmp/agentcow-wheel/bin/python -c "import agentcow; assert agentcow.__version__ == '0.2.0rc1'; print(agentcow.__version__)"
+          /tmp/agentcow-wheel/bin/python - <<'PY'
+          import importlib.metadata
+          import importlib.util
+
+          import agentcow
+
+          assert agentcow.__version__ == "0.2.0rc1"
+          assert importlib.metadata.version("agent-cow-postgresql") == "0.2.0rc1"
+          assert importlib.util.find_spec("agentcow.blob") is None
+          try:
+              importlib.metadata.version("agent-cow")
+          except importlib.metadata.PackageNotFoundError:
+              pass
+          else:
+              raise AssertionError("renamed wheel provides the historical distribution")
+          print(agentcow.__version__)
+          PY

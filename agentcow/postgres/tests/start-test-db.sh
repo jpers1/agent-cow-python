@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CONTAINER_NAME="agent-cow-pg"
+CONTAINER_NAME="agent-cow-postgresql-pg"
 PG_USER="${PG_USER:-postgres}"
 PG_PASSWORD="${PG_PASSWORD:-postgres}"
 PG_DBNAME="${PG_DBNAME:-agent_cow_test}"

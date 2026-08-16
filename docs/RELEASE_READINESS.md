@@ -19,28 +19,23 @@ migration, support, and trust-boundary requirements documented here.
 - Upstream project: `trail-ml/agent-cow-python`
 - Upstream audited commit: `d49d74e3f357d67bf5eda5377bbca50cdf3d952e`
 - Upstream package version at that commit: `0.1.7`
-- Maintained downstream project: `jpers1/agent-cow-python`
+- Maintained downstream project: `jpers1/agent-cow-postgresql`
 - Downstream release-candidate version: `0.2.0rc1`
 - License: MIT, with upstream history, authorship, notices, and `LICENSE`
   preserved
 
-The distribution name remains `agent-cow`. This release candidate is not
-published to PyPI. Installing `agent-cow` by unqualified PyPI name may resolve
-the upstream package rather than this fork; downstream consumers must use a
-reviewed wheel or a pinned fork revision until the human lead approves a
-publication mechanism.
+The maintained distribution is `agent-cow-postgresql`; the Python import
+namespace remains `agentcow`. This release candidate is not published to
+PyPI. Downstream consumers must use a reviewed wheel or pinned fork revision
+until the human lead approves a publication mechanism.
 
 ## Supported downstream scope
 
-`agentcow.postgres` is the downstream-supported and hardened subsystem. The
-verified matrix is Python 3.10 through 3.14 and PostgreSQL 14 through 18. The
-preferred integration uses asyncpg 0.31.0; the optional SQLAlchemy async
-adapter is verified with SQLAlchemy 2.0.46. Exact images, patch releases, test
-counts, and durations are in [`SUPPORT_MATRIX.md`](SUPPORT_MATRIX.md).
-
-`agentcow.blob` remains upstream-derived functionality and is outside the
-hardened downstream PostgreSQL support scope assessed by H01–H10. This is not
-a general statement that the blob subsystem is broken.
+`agent-cow-postgresql` is the maintained PostgreSQL downstream. The verified
+matrix is Python 3.10 through 3.14 and PostgreSQL 14 through 18. The preferred
+integration uses asyncpg 0.31.0; the optional SQLAlchemy async adapter is
+verified with SQLAlchemy 2.0.46. Exact images, patch releases, test counts, and
+durations are in [`SUPPORT_MATRIX.md`](SUPPORT_MATRIX.md).
 
 ## Reconciled hardening state
 
@@ -170,7 +165,7 @@ uv run python scripts/check_dependency_policy.py
 It contains no mandatory third-party runtime dependency and the installed
 development graph is checked against the repository's permissive-only
 allowlist. The standard path excludes Psycopg, pytest-postgresql, mirakuru,
-Black, Hatchling, pathspec, Moto, and certifi. The detailed direct/transitive
+Black, Hatchling, pathspec, and certifi. The detailed direct/transitive
 inventory is in [`DEPENDENCY_INVENTORY.md`](DEPENDENCY_INVENTORY.md).
 
 The inherited automatic PyPI workflow and tag-pushing release script are not
@@ -198,5 +193,3 @@ explicit configuration.
   conservatively when a safe comparison cannot be made.
 - The supported windows are Python 3.10–3.14 and PostgreSQL 14–18; versions
   outside them are not covered by this evidence.
-- The blob subsystem is outside the hardened downstream PostgreSQL support
-  scope.

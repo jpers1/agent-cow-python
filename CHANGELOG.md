@@ -8,6 +8,14 @@ history and MIT attribution of `trail-ml/agent-cow-python`.
 Downstream release candidate derived from upstream `0.1.7` at commit
 `d49d74e3f357d67bf5eda5377bbca50cdf3d952e`.
 
+### Scope
+
+- The maintained downstream distribution is now `agent-cow-postgresql`.
+- The Python import namespace remains `agentcow`.
+- The repository focuses exclusively on PostgreSQL.
+- This PostgreSQL-focused fork intentionally does not ship the upstream
+  blob-storage subsystem.
+
 ### Added
 
 - Transaction-owning asyncpg and optional SQLAlchemy session scopes.
@@ -45,8 +53,6 @@ Downstream release candidate derived from upstream `0.1.7` at commit
 - Distribution name and upstream low-level Python APIs remain available.
 - Supported Python versions are 3.10–3.14.
 - Supported PostgreSQL versions are 14–18.
-- `agentcow.blob` remains upstream-derived and is outside the hardened
-  PostgreSQL support scope of this downstream release candidate.
 - This downstream RC is not published to PyPI. Build a wheel from reviewed
   source or install from a pinned fork revision.
 

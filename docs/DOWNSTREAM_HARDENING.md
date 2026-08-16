@@ -2,8 +2,8 @@
 
 ## Purpose
 
-This maintained fork extends the upstream `agent-cow` library with PostgreSQL
-correctness, isolation, privilege-boundary, conflict-detection, and
+`agent-cow-postgresql` extends the upstream `agent-cow` library with
+PostgreSQL correctness, isolation, privilege-boundary, conflict-detection, and
 transaction-safety improvements. It remains a generic copy-on-write library.
 
 The H01–H09 sequence is complete on downstream `main`. Each item was delivered
@@ -26,13 +26,6 @@ The downstream fork provides:
 Hardening should use PostgreSQL-native semantics, make unsafe preconditions
 explicit, and preserve upstream behavior where doing so does not compromise a
 documented correctness boundary.
-
-## Blob subsystem
-
-The existing blob subsystem remains upstream-derived code and is not included
-in the hardened downstream PostgreSQL support scope. It remains in the
-repository for upstream compatibility and possible generic use. This
-hardening sequence neither modifies nor removes it.
 
 ## Compatibility
 
@@ -283,11 +276,11 @@ test-only synchronous facade preserves the inherited implicit-transaction
 assertions while all database access, role setup, concurrency, and native
 adapter coverage use asyncpg. The complete 147-test tree remains intact.
 
-The standard `dev` group is now PostgreSQL-specific and permissive-only. Ruff
-replaces Black, Setuptools replaces Hatchling, and blob-only Moto tooling is no
-longer installed by the normal downstream workflow. CI validates the installed
-dependency set before running the unchanged H08 matrix and package builds.
-See [`DEPENDENCY_INVENTORY.md`](DEPENDENCY_INVENTORY.md).
+The standard `dev` group covers the complete maintained package and is
+permissive-only. Ruff
+replaces Black, and Setuptools replaces Hatchling. CI validates the installed
+dependency set before running the unchanged H08 matrix and package builds. See
+[`DEPENDENCY_INVENTORY.md`](DEPENDENCY_INVENTORY.md).
 
-Future work remains subject to separate narrow work orders. Private audit
+Future work remains subject to separate narrow work orders. Unpublished review
 artifacts are not part of this public fork or its release artifacts.

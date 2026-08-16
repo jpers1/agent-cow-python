@@ -8,7 +8,8 @@ Start a local Postgres container:
 ./agentcow/postgres/tests/start-test-db.sh
 ```
 
-This creates a Docker container (`agent-cow-pg`) with Postgres 18 on port 5432.
+This creates a Docker container (`agent-cow-postgresql-pg`) with Postgres 18
+on port 5432.
 The script is idempotent — it reuses an existing container if one already exists.
 
 ## Running tests
@@ -28,7 +29,7 @@ PostgreSQL process manager or Psycopg fixture is installed.
 From another terminal:
 
 ```bash
-docker exec -it agent-cow-pg psql -U postgres -d agent_cow_test
+docker exec -it agent-cow-postgresql-pg psql -U postgres -d agent_cow_test
 ```
 
 Or from your host (if `psql` is installed locally):

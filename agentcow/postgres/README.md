@@ -1,11 +1,13 @@
-# agent-cow — PostgreSQL
+# agent-cow-postgresql
 
-PostgreSQL backend for [agent-cow](../../README.md). Provides database-level Copy-On-Write via PL/pgSQL functions, change-tracking tables, and views — works with any async PostgreSQL driver.
+PostgreSQL Copy-On-Write for AI-agent and application workflows. The library
+uses PL/pgSQL functions, change-tracking tables, and views and works with any
+async PostgreSQL driver.
 
 ## Installation
 
 ```bash
-pip install agent-cow
+pip install agent-cow-postgresql
 ```
 
 The verified downstream range is Python 3.10–3.14 and PostgreSQL 14–18. See
@@ -15,13 +17,13 @@ and evidence.
 For the preferred asyncpg runtime adapter:
 
 ```bash
-pip install agent-cow asyncpg
+pip install agent-cow-postgresql asyncpg
 ```
 
 For SQLAlchemy support:
 
 ```bash
-pip install agent-cow[sqlalchemy]
+pip install agent-cow-postgresql[sqlalchemy]
 ```
 
 ## Recommended hardened integration
@@ -161,7 +163,8 @@ release; any failure rolls the complete action back.
 
 ## Optimistic conflicts
 
-The first time a session modifies a primary key, agent-cow records whether the
+The first time a session modifies a primary key, `agent-cow-postgresql`
+records whether the
 canonical row existed, its complete row state, and the base-table column
 signature. Further operations on that key retain this original baseline. This
 is row-level first-touch detection, not a snapshot taken when a session UUID is
@@ -346,7 +349,8 @@ await commit_cow_session_schema(executor, session_id, defer_fk_constraints=True)
 
 `enable_cow(..., allow_deferred_fks=True)` only flips constraints that are currently `NOT DEFERRABLE`. Constraints that are `INITIALLY DEFERRED` (a deliberate schema choice) are left alone. `disable_cow` reverses the flip.
 
-Without the opt-in, **no schema changes** are made by agent-cow.
+Without the opt-in, **no schema changes** are made by
+`agent-cow-postgresql`.
 
 ### Types
 

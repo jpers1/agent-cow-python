@@ -1,8 +1,4 @@
-"""
-Base COW configuration shared by all implementations.
-
-No driver-specific imports — only standard Python.
-"""
+"""Base COW configuration for the PostgreSQL implementation."""
 
 from __future__ import annotations
 
@@ -12,11 +8,7 @@ from dataclasses import dataclass
 
 @dataclass
 class CowConfig:
-    """Base configuration shared by all COW implementations.
-
-    Subclassed by each backend (SQL, blob, etc.) to add
-    implementation-specific fields.
-    """
+    """Base configuration extended by PostgreSQL-specific settings."""
 
     session_id: uuid.UUID | None = None
     operation_id: uuid.UUID | None = None

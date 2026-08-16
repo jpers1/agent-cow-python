@@ -2,9 +2,9 @@
 
 ## Scope
 
-This matrix covers the hardened downstream PostgreSQL subsystem, including all
+This matrix covers the complete maintained PostgreSQL package, including all
 H01 through H07 correctness, privilege, session, conflict, and atomic-promotion
-tests. It does not make a support claim for the upstream-derived blob backend.
+tests.
 
 The downstream support window is deliberately finite:
 
@@ -149,8 +149,8 @@ multi-table rollback readiness scenarios while retaining H09's replacement of
 the inherited `pytest-postgresql`/Psycopg fixture layer with asyncpg and direct
 disposable-database lifecycle management. Every matrix container installs
 from the locked `dev` group and runs the installed dependency-policy check
-before pytest. `pytest-postgresql`, Psycopg, mirakuru, Black, pathspec, Moto,
-and certifi are absent from that supported environment.
+before pytest. `pytest-postgresql`, Psycopg, mirakuru, Black, pathspec, and
+certifi are absent from that supported environment.
 
 The production package continues to have zero mandatory Python runtime
 dependencies. The preferred optional asyncpg 0.31.0 adapter is Apache-2.0 and

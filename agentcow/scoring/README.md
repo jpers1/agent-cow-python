@@ -1,4 +1,4 @@
-# agent-cow scoring
+# agent-cow-postgresql scoring utilities
 
 **Score an agent's COW session against a ground truth recording.**
 

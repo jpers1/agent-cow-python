@@ -1,4 +1,4 @@
-"""Recommended asyncpg integration for a hardened agent-cow deployment.
+"""Recommended asyncpg integration for an agent-cow-postgresql deployment.
 
 The application, not an external caller, resolves an opaque credential to a
 server-owned session UUID.  Runtime traffic uses only the hardened runtime
@@ -40,7 +40,7 @@ class AsyncpgExecutor:
 
 
 class ApplicationSessionStore(Protocol):
-    """Application authorization boundary, deliberately outside agent-cow."""
+    """Application authorization boundary, deliberately outside the library."""
 
     async def resolve(self, external_capability: str) -> uuid.UUID:
         """Return a server-owned UUID after authenticating the capability."""
