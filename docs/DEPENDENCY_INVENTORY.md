@@ -35,7 +35,7 @@ README package data, wheel creation, and sdist creation are represented in
 
 | Distribution | Version | Relationship | Purpose/path | License/SPDX | Policy |
 | --- | --- | --- | --- | --- | --- |
-| `agent-cow` | 0.1.7 | Project | PostgreSQL CoW library | MIT | ALLOWED |
+| `agent-cow` | 0.2.0rc1 | Project | PostgreSQL CoW library | MIT | ALLOWED |
 
 There are zero mandatory third-party Python runtime dependencies.
 
@@ -53,7 +53,7 @@ There are zero mandatory third-party Python runtime dependencies.
 
 | Distribution | Version | Relationship | Purpose/path | License/SPDX | Policy |
 | --- | --- | --- | --- | --- | --- |
-| `pytest` | 9.0.2 | Direct `dev` | Complete 147-test runner | MIT | ALLOWED |
+| `pytest` | 9.0.2 | Direct `dev` | Complete 150-test runner | MIT | ALLOWED |
 | `pytest-asyncio` | 1.3.0 | Direct `dev` | Async fixtures/tests | Apache-2.0 | ALLOWED |
 | `asyncpg` | 0.31.0 | Direct `dev` | Fixture database access and production-adapter tests | Apache-2.0 | ALLOWED |
 | `SQLAlchemy` | 2.0.46 | Direct `dev` | Optional adapter tests | MIT | ALLOWED |

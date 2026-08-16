@@ -36,7 +36,7 @@ ones covered by this H08 evidence.
 The local and CI matrix uses Python 3.12 as the primary Python version and
 PostgreSQL 18 as the representative PostgreSQL version:
 
-1. run the complete 147-test PostgreSQL tree on Python 3.12 against every
+1. run the complete 150-test PostgreSQL tree on Python 3.12 against every
    PostgreSQL major from 14 through 18;
 2. run the same complete tree on every Python minor from 3.10 through 3.14
    against PostgreSQL 18;
@@ -53,11 +53,11 @@ out or skipped by version.
 | Version | Status | Local full-suite evidence |
 | --- | --- | --- |
 | 3.9 and earlier | UNSUPPORTED | Below the package lower bound |
-| 3.10.21 | SUPPORTED | 147 passed on PostgreSQL 14.24 and 18.6; wheel/sdist build and isolated wheel install passed |
-| 3.11.16 | SUPPORTED | 147 passed on PostgreSQL 18.6 |
-| 3.12.14 | SUPPORTED | 147 passed on PostgreSQL 14.24, 15.19, 16.15, 17.11, and 18.6; wheel/sdist build and isolated wheel install passed |
-| 3.13.15 | SUPPORTED | 147 passed on PostgreSQL 18.6 |
-| 3.14.7 | SUPPORTED | 147 passed on PostgreSQL 18.6; wheel/sdist build and isolated wheel install passed |
+| 3.10.21 | SUPPORTED | 150 passed on PostgreSQL 14.24 and 18.6; wheel/sdist build and isolated wheel install passed |
+| 3.11.16 | SUPPORTED | 150 passed on PostgreSQL 18.6 |
+| 3.12.14 | SUPPORTED | 150 passed on PostgreSQL 14.24, 15.19, 16.15, 17.11, and 18.6; wheel/sdist build and isolated wheel install passed |
+| 3.13.15 | SUPPORTED | 150 passed on PostgreSQL 18.6 |
+| 3.14.7 | SUPPORTED | 150 passed on PostgreSQL 18.6; wheel/sdist build and isolated wheel install passed |
 | 3.15 and later | NOT_TESTED | Outside the bounded downstream metadata |
 
 ## PostgreSQL
@@ -68,21 +68,21 @@ container images. Counts are `passed / failed / skipped`.
 | Major | Status | Exact image | `server_version` | Python | Result | Pytest duration |
 | --- | --- | --- | --- | --- | --- | --- |
 | 13 and earlier | UNSUPPORTED | — | — | — | Below the downstream minimum | — |
-| 14 | SUPPORTED | `postgres:14.24` | `14.24 (Debian 14.24-1.pgdg13+2)` | 3.10.21 | 147 / 0 / 0 | 107.428 s |
-| 14 | SUPPORTED | `postgres:14.24` | `14.24 (Debian 14.24-1.pgdg13+2)` | 3.12.14 | 147 / 0 / 0 | 109.104 s |
-| 15 | SUPPORTED | `postgres:15.19` | `15.19 (Debian 15.19-1.pgdg13+2)` | 3.12.14 | 147 / 0 / 0 | 84.075 s |
-| 16 | SUPPORTED | `postgres:16.15` | `16.15 (Debian 16.15-1.pgdg13+2)` | 3.12.14 | 147 / 0 / 0 | 85.761 s |
-| 17 | SUPPORTED | `postgres:17.11` | `17.11 (Debian 17.11-1.pgdg13+2)` | 3.12.14 | 147 / 0 / 0 | 67.664 s |
-| 18 | SUPPORTED | `postgres:18.6` | `18.6 (Debian 18.6-1.pgdg13+2)` | 3.10.21 | 147 / 0 / 0 | 70.774 s |
-| 18 | SUPPORTED | `postgres:18.6` | `18.6 (Debian 18.6-1.pgdg13+2)` | 3.11.16 | 147 / 0 / 0 | 67.453 s |
-| 18 | SUPPORTED | `postgres:18.6` | `18.6 (Debian 18.6-1.pgdg13+2)` | 3.12.14 | 147 / 0 / 0 | 68.562 s |
-| 18 | SUPPORTED | `postgres:18.6` | `18.6 (Debian 18.6-1.pgdg13+2)` | 3.13.15 | 147 / 0 / 0 | 68.165 s |
-| 18 | SUPPORTED | `postgres:18.6` | `18.6 (Debian 18.6-1.pgdg13+2)` | 3.14.7 | 147 / 0 / 0 | 68.443 s |
+| 14 | SUPPORTED | `postgres:14.24` | `14.24 (Debian 14.24-1.pgdg13+2)` | 3.10.21 | 150 / 0 / 0 | 82.367 s |
+| 14 | SUPPORTED | `postgres:14.24` | `14.24 (Debian 14.24-1.pgdg13+2)` | 3.12.14 | 150 / 0 / 0 | 101.476 s |
+| 15 | SUPPORTED | `postgres:15.19` | `15.19 (Debian 15.19-1.pgdg13+2)` | 3.12.14 | 150 / 0 / 0 | 85.408 s |
+| 16 | SUPPORTED | `postgres:16.15` | `16.15 (Debian 16.15-1.pgdg13+2)` | 3.12.14 | 150 / 0 / 0 | 86.878 s |
+| 17 | SUPPORTED | `postgres:17.11` | `17.11 (Debian 17.11-1.pgdg13+2)` | 3.12.14 | 150 / 0 / 0 | 68.365 s |
+| 18 | SUPPORTED | `postgres:18.6` | `18.6 (Debian 18.6-1.pgdg13+2)` | 3.10.21 | 150 / 0 / 0 | 71.625 s |
+| 18 | SUPPORTED | `postgres:18.6` | `18.6 (Debian 18.6-1.pgdg13+2)` | 3.11.16 | 150 / 0 / 0 | 68.845 s |
+| 18 | SUPPORTED | `postgres:18.6` | `18.6 (Debian 18.6-1.pgdg13+2)` | 3.12.14 | 150 / 0 / 0 | 69.505 s |
+| 18 | SUPPORTED | `postgres:18.6` | `18.6 (Debian 18.6-1.pgdg13+2)` | 3.13.15 | 150 / 0 / 0 | 68.086 s |
+| 18 | SUPPORTED | `postgres:18.6` | `18.6 (Debian 18.6-1.pgdg13+2)` | 3.14.7 | 150 / 0 / 0 | 68.147 s |
 | 19 and later | NOT_TESTED | — | — | — | Outside the current PostgreSQL release window | — |
 
 ## Hardened coverage
 
-The 147 tests include:
+The 150 tests include:
 
 - H01 schema-wide sequence and deterministic same-transaction ordering;
 - H02 control-schema qualification and hostile `search_path` behavior;
@@ -143,12 +143,14 @@ pair is Python 3.10/PostgreSQL 14; the newest is Python 3.14/PostgreSQL 18.
 
 ## Test dependency note
 
-H09 preserves the H08 ten-pair strategy and 147-test count while replacing the
-inherited `pytest-postgresql`/Psycopg fixture layer with asyncpg and direct
-disposable-database lifecycle management. Every matrix container installs from
-the locked `dev` group and runs the installed dependency-policy check before
-pytest. `pytest-postgresql`, Psycopg, mirakuru, Black, pathspec, Moto, and
-certifi are absent from that supported environment.
+H09 preserves the H08 ten-pair strategy. H10 increases the release-candidate
+tree from 147 to 150 tests with public-API, hardened-lifecycle/conflict, and
+multi-table rollback readiness scenarios while retaining H09's replacement of
+the inherited `pytest-postgresql`/Psycopg fixture layer with asyncpg and direct
+disposable-database lifecycle management. Every matrix container installs
+from the locked `dev` group and runs the installed dependency-policy check
+before pytest. `pytest-postgresql`, Psycopg, mirakuru, Black, pathspec, Moto,
+and certifi are absent from that supported environment.
 
 The production package continues to have zero mandatory Python runtime
 dependencies. The preferred optional asyncpg 0.31.0 adapter is Apache-2.0 and

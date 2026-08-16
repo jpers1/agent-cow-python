@@ -1,7 +1,5 @@
 """Tests for agent-cow PostgreSQL COW implementation."""
 
-import uuid
-
 import pytest
 
 from agentcow.postgres import (

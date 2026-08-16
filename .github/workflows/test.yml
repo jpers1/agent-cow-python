@@ -30,11 +30,13 @@ jobs:
         run: |
           .venv/bin/ruff format --check \
             agentcow/postgres/tests/conftest.py \
+            agentcow/postgres/tests/test_release_readiness.py \
             scripts/check_dependency_policy.py \
             scripts/test_postgres_matrix.py
           .venv/bin/ruff check \
             agentcow/postgres/tests/conftest.py \
             agentcow/postgres/tests/test_conflict_detection.py \
+            agentcow/postgres/tests/test_release_readiness.py \
             agentcow/postgres/tests/test_role_hardening.py \
             scripts/check_dependency_policy.py \
             scripts/test_postgres_matrix.py
@@ -166,4 +168,4 @@ jobs:
         run: |
           python -m venv /tmp/agentcow-wheel
           /tmp/agentcow-wheel/bin/python -m pip install dist/*.whl
-          /tmp/agentcow-wheel/bin/python -c "import agentcow; print(agentcow.__version__)"
+          /tmp/agentcow-wheel/bin/python -c "import agentcow; assert agentcow.__version__ == '0.2.0rc1'; print(agentcow.__version__)"

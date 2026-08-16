@@ -2,7 +2,6 @@
 
 **Database Copy-On-Write for AI agent workspace isolation**
 
-[![PyPI](https://img.shields.io/pypi/v/agent-cow.svg)](https://pypi.org/project/agent-cow/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Downstream fork
@@ -56,8 +55,14 @@ Without agent-cow:                With agent-cow:
 
 ## Installation
 
+The downstream `0.2.0rc1` release candidate is not published to PyPI. The
+distribution name remains `agent-cow`, so `pip install agent-cow` may resolve
+the upstream package rather than this fork. Until the human lead authorizes a
+downstream publication mechanism, install from a pinned fork commit or a wheel
+built from a reviewed source checkout:
+
 ```bash
-pip install agent-cow
+python -m pip install .
 ```
 
 The verified downstream PostgreSQL range is Python 3.10–3.14 and PostgreSQL
@@ -124,6 +129,8 @@ for the complete deployment, runtime, and reviewer example.
 - `deploy_cow_functions(executor)` — Deploy COW SQL functions (one-time setup)
 - `enable_cow(executor, table_name)` — Enable COW on a table
 - `enable_cow_schema(executor)` — Enable COW on all tables in a schema
+- `harden_cow_schema(executor, ...)` — Apply setup/runtime/reviewer boundaries
+- `validate_cow_schema_privileges(executor, ...)` — Validate effective privileges
 - `disable_cow(executor, table_name)` — Disable COW and restore original table
 - `disable_cow_schema(executor)` — Disable COW on all tables in a schema
 - `commit_cow_session(executor, table_name, session_id)` — Commit all session changes
@@ -137,13 +144,17 @@ for the complete deployment, runtime, and reviewer example.
 - `get_operation_dependencies(executor, session_id)` — Get operation dependency graph
 - `commit_cow_operations(executor, table_name, session_id, operation_ids)` — Commit specific operations
 - `discard_cow_operations(executor, table_name, session_id, operation_ids)` — Discard specific operations
+- `get_cow_conflicts(executor, session_id)` — Inspect first-touch conflicts
 
 ### Session Management
 
 - `asyncpg_cow_session(connection_or_pool, session_id=...)` — Recommended transaction-owning asyncpg request scope
 - `sqlalchemy_cow_session(engine_or_session, session_id=...)` — Equivalent optional SQLAlchemy async scope
+- `CowSession` — Active high-level runtime transaction object
 - `asyncpg_cow_reviewer(connection_or_pool)` — Recommended atomic asyncpg promotion/discard scope
 - `sqlalchemy_cow_reviewer(engine_or_session)` — Equivalent optional SQLAlchemy reviewer scope
+- `CowReviewer` — Active high-level reviewer transaction object
+- `CowConflictError` — Stable Python promotion-conflict exception
 - `CowPostgresConfig` — Dataclass for COW configuration
 - `build_cow_variable_statements(session_id, operation_id)` — Build low-level transaction-local context statements
 

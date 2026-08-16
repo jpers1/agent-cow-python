@@ -6,14 +6,13 @@ This maintained fork extends the upstream `agent-cow` library with bounded
 PostgreSQL correctness, isolation, and integration improvements. It remains a
 generic copy-on-write engine and is not the SLAIF Agent-State product.
 
-The sequence described here is provisional. Each change requires its own
-narrow work order, regression evidence, compatibility review, and
-human-approved merge. Implementation status is recorded in the item-specific
-sections below.
+The H01–H09 sequence is complete on downstream `main`. Each item was delivered
+through a narrow human-merged pull request with regression evidence and public
+documentation. The release gate records the reconciled status below.
 
 ## PostgreSQL subsystem
 
-The downstream fork intends to improve:
+The downstream fork provides:
 
 - deterministic operation ordering;
 - schema-safe internal SQL and object references;
@@ -45,7 +44,7 @@ are preferred when they can provide the required guarantees. Any breaking API
 or behavior change requires explicit human approval and clear migration
 documentation.
 
-## Provisional implementation sequence
+## Reconciled implementation sequence
 
 ```text
 H01 — deterministic operation ordering
@@ -58,6 +57,24 @@ H07 — transaction-safe promotion API
 H08 — PostgreSQL compatibility/version matrix
 H09 — downstream dependency/test cleanup
 ```
+
+| Item | Implemented | Verified | Documented |
+| --- | --- | --- | --- |
+| H01 — deterministic operation ordering | IMPLEMENTED | VERIFIED | DOCUMENTED |
+| H02 — schema-qualified internal registry/functions | IMPLEMENTED | VERIFIED | DOCUMENTED |
+| H03 — privilege and role hardening | IMPLEMENTED | VERIFIED | DOCUMENTED |
+| H04 — safe session transaction API | IMPLEMENTED | VERIFIED | DOCUMENTED |
+| H05 — safe server-owned session integration examples | IMPLEMENTED | VERIFIED | DOCUMENTED |
+| H06 — conflict-detection support | IMPLEMENTED | VERIFIED | DOCUMENTED |
+| H07 — transaction-safe promotion API | IMPLEMENTED | VERIFIED | DOCUMENTED |
+| H08 — PostgreSQL compatibility/version matrix | IMPLEMENTED | VERIFIED | DOCUMENTED |
+| H09 — downstream dependency/test cleanup | IMPLEMENTED | VERIFIED | DOCUMENTED |
+
+`IMPLEMENTED` means the intended code, test, workflow, or documentation change
+is present on downstream `main`. `VERIFIED` means its focused regression
+coverage and the complete PostgreSQL matrix pass. `DOCUMENTED` means the
+public integration, compatibility, migration, or dependency contract is
+recorded in this document and its linked references.
 
 ### H01 implementation status and design
 
@@ -274,6 +291,5 @@ longer installed by the normal downstream workflow. CI validates the installed
 dependency set before running the unchanged H08 matrix and package builds.
 See [`DEPENDENCY_INVENTORY.md`](DEPENDENCY_INVENTORY.md).
 
-This ordering may change after review, but work should remain PR-sized. Tests
-for a hardening item should be introduced with its corresponding fix rather
-than publishing private audit artifacts independently.
+Future work remains subject to separate narrow work orders. Private audit
+artifacts are not part of this public fork or its release artifacts.
