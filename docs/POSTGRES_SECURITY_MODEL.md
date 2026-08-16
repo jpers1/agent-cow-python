@@ -3,8 +3,8 @@
 ## Purpose
 
 The hardened PostgreSQL path separates deployment, application CRUD, and
-promotion authority. Role names are supplied by the application; agent-cow
-does not create globally named roles.
+promotion authority. Role names are supplied by the application;
+`agent-cow-postgresql` does not create globally named roles.
 
 The model assumes one setup/owner role owns the `agentcow` control schema and
 each enabled base table and has `USAGE`/`CREATE` on the application schema.
@@ -244,9 +244,10 @@ unrelated table sets do not acquire common locks.
 
 `CowConflictError` is the stable Python conflict contract. Constraint and
 other database failures retain their adapter-native exception types, while
-invalid selections and stale connection state use distinct agent-cow
-exceptions. The low-level commit/discard functions remain available, but a
-caller using them must pin one connection and own one explicit transaction.
+invalid selections and stale connection state use distinct
+`agent-cow-postgresql` exceptions. The low-level commit/discard functions
+remain available, but a caller using them must pin one connection and own one
+explicit transaction.
 
 When upgrading an existing hardened schema to H06, first remove pending work
 using the previous version. Deploy H06 and rerun `harden_cow_schema(...)` in

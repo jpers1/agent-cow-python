@@ -21,7 +21,7 @@ def _name(value: str) -> str:
 
 
 APPROVED = {
-    "agent-cow": Approval("MIT", "project under test"),
+    "agent-cow-postgresql": Approval("MIT", "project under test"),
     "async-timeout": Approval("Apache-2.0", "asyncpg on Python 3.10"),
     "asyncpg": Approval("Apache-2.0", "preferred PostgreSQL adapter"),
     "backports-asyncio-runner": Approval("PSF-2.0", "pytest-asyncio on Python 3.10"),
@@ -53,7 +53,7 @@ APPROVED = {
 }
 
 REQUIRED = {
-    "agent-cow",
+    "agent-cow-postgresql",
     "asyncpg",
     "build",
     "pytest",
@@ -64,7 +64,10 @@ REQUIRED = {
 }
 
 EXPLICITLY_DISALLOWED = {
+    "agent-cow",
     "black",
+    "boto3",
+    "botocore",
     "certifi",
     "hatchling",
     "mirakuru",
@@ -74,6 +77,7 @@ EXPLICITLY_DISALLOWED = {
     "psycopg-binary",
     "psycopg-pool",
     "pytest-postgresql",
+    "s3transfer",
 }
 
 
@@ -106,7 +110,7 @@ def main() -> int:
             failures.append(f"disallowed package installed: {name}")
             status = "DISALLOWED"
             approved_license = "—"
-            reason = "excluded from supported PostgreSQL path"
+            reason = "excluded from the maintained project environment"
         elif approval is None:
             failures.append(f"unexpected package installed: {name}")
             status = "UNREVIEWED"

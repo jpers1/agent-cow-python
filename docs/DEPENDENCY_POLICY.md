@@ -51,10 +51,9 @@ The canonical development installation is:
 uv sync --frozen --group dev
 ```
 
-It includes the PostgreSQL implementation, the complete PostgreSQL test tree,
-the asyncpg and optional SQLAlchemy adapters, Ruff, and the build frontend and
-backend. It does not include blob-test dependencies. Validate the installed
-environment with:
+It includes the complete maintained package and PostgreSQL test tree, the
+asyncpg and optional SQLAlchemy adapters, Ruff, and the build frontend and
+backend. Validate the installed environment with:
 
 ```bash
 uv run python scripts/check_dependency_policy.py
@@ -80,11 +79,3 @@ The package build uses the installed, policy-checked Setuptools backend:
 ```bash
 uv run python -m build --no-isolation --wheel --sdist
 ```
-
-## Blob test scope
-
-The blob implementation and its `boto3` runtime extra remain inherited
-upstream functionality. Blob testing is outside the supported downstream
-PostgreSQL development environment and does not pull `moto` or its dependency
-graph into the standard `dev` group. This is a scope boundary, not a statement
-that those tools are unlawful or defective.

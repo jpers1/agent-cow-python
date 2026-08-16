@@ -2,24 +2,29 @@
 
 ## Repository identity
 
-This repository is an MIT-licensed downstream fork of
+`agent-cow-postgresql` is an MIT-licensed PostgreSQL-focused downstream fork of
 [`trail-ml/agent-cow-python`](https://github.com/trail-ml/agent-cow-python),
 maintained by `jpers1`. Preserve upstream attribution, copyright notices,
 license terms, authorship, and Git history.
 
 The fork hardens and extends the PostgreSQL copy-on-write engine for generic
-AI-agent and application workflows. It is a reusable library, not an
-application product. Do not add product services, gateways, UIs, or
-application-specific policy here.
+AI-agent and application workflows. The maintained and shipped scope is
+PostgreSQL only. It is a reusable library, not an application product. Do not
+add product services, gateways, UIs, or application-specific policy here.
 
 ## Remote boundary
 
 The expected remotes are:
 
 ```text
-origin   https://github.com/jpers1/agent-cow-python.git
+origin   https://github.com/jpers1/agent-cow-python.git (H11 review only)
 upstream https://github.com/trail-ml/agent-cow-python.git
 ```
+
+After the human merges and separately authorizes the repository rename, the
+canonical downstream origin becomes
+`https://github.com/jpers1/agent-cow-postgresql.git`. Until then, push the H11
+review branch only to the existing `jpers1/agent-cow-python` origin.
 
 - Push only to `origin` unless the human lead explicitly authorizes otherwise.
 - Never open an upstream issue or pull request without explicit human

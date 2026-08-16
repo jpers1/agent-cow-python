@@ -150,11 +150,11 @@ def read_junit(path: Path) -> dict[str, int | float]:
 
 def test_command() -> str:
     return f"""set -eu
-cp -a /source /tmp/agent-cow
-cd /tmp/agent-cow
+cp -a /source /tmp/agent-cow-postgresql
+cd /tmp/agent-cow-postgresql
 python -m pip install --disable-pip-version-check --quiet uv=={UV_VERSION}
 uv sync --frozen --group dev
-export PATH="/tmp/agent-cow/.venv/bin:$PATH"
+export PATH="/tmp/agent-cow-postgresql/.venv/bin:$PATH"
 python scripts/check_dependency_policy.py
 python - <<'PY' > /result/environment.json
 import asyncio

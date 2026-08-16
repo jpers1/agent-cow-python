@@ -2,11 +2,11 @@
 
 ## Scope and method
 
-This is the H09 inventory for the supported PostgreSQL development, test,
-build, and CI path. Versions are from `uv.lock`; dependency paths are from the
-locked distribution metadata and clean H08 matrix environments. License
-identifiers are engineering-policy classifications based on distribution
-metadata and project license files, not legal advice.
+This inventory covers the complete maintained `agent-cow-postgresql` package,
+development, test, build, and CI path. Versions are from `uv.lock`; dependency
+paths are from the locked distribution metadata and clean H08 matrix
+environments. License identifiers are engineering-policy classifications
+based on distribution metadata and project license files, not legal advice.
 
 The automated installed-environment check is
 `scripts/check_dependency_policy.py`. It rejects any distribution outside the
@@ -35,7 +35,7 @@ README package data, wheel creation, and sdist creation are represented in
 
 | Distribution | Version | Relationship | Purpose/path | License/SPDX | Policy |
 | --- | --- | --- | --- | --- | --- |
-| `agent-cow` | 0.2.0rc1 | Project | PostgreSQL CoW library | MIT | ALLOWED |
+| `agent-cow-postgresql` | 0.2.0rc1 | Project | PostgreSQL CoW library | MIT | ALLOWED |
 
 There are zero mandatory third-party Python runtime dependencies.
 
@@ -43,7 +43,7 @@ There are zero mandatory third-party Python runtime dependencies.
 
 | Distribution | Version | Relationship | Purpose/path | License/SPDX | Policy |
 | --- | --- | --- | --- | --- | --- |
-| `asyncpg` | 0.31.0 | Direct optional | `agent-cow[sqlalchemy]`; preferred PostgreSQL driver | Apache-2.0 | ALLOWED |
+| `asyncpg` | 0.31.0 | Direct optional | Preferred PostgreSQL driver and part of the `sqlalchemy` extra | Apache-2.0 | ALLOWED |
 | `async-timeout` | 5.0.1 | Conditional transitive | `asyncpg -> async-timeout` on Python 3.10 | Apache-2.0 | ALLOWED |
 | `SQLAlchemy` | 2.0.46 | Direct optional | Async ORM adapter | MIT | ALLOWED |
 | `greenlet` | 3.3.1 | Platform transitive | `SQLAlchemy -> greenlet` where supported | MIT AND Python-2.0 | ALLOWED |
@@ -96,26 +96,6 @@ GitHub Actions is a CI execution venue, not a required local build/test
 service. `scripts/test_postgres_matrix.py` reproduces the supported matrix
 locally without a hosted account or secrets.
 
-## Blob optional runtime and test scope
-
-The inherited runtime extra remains separately installable and is not included
-by the standard PostgreSQL `dev` group:
-
-| Distribution | Version | Relationship | Purpose/path | License/SPDX | Policy |
-| --- | --- | --- | --- | --- | --- |
-| `boto3` | 1.42.76 | Direct `blob` optional | Upstream-derived S3 client | Apache-2.0 | ALLOWED, OUTSIDE HARDENED POSTGRESQL SCOPE |
-| `botocore` | 1.42.76 | Transitive | `boto3 -> botocore` | Apache-2.0 | ALLOWED, OUTSIDE HARDENED POSTGRESQL SCOPE |
-| `jmespath` | 1.1.0 | Transitive | boto3/botocore query support | MIT | ALLOWED, OUTSIDE HARDENED POSTGRESQL SCOPE |
-| `s3transfer` | 0.16.0 | Transitive | `boto3 -> s3transfer` | Apache-2.0 | ALLOWED, OUTSIDE HARDENED POSTGRESQL SCOPE |
-| `python-dateutil` | 2.9.0.post0 | Transitive | `botocore -> python-dateutil` | Apache-2.0 OR BSD-3-Clause | ALLOWED, OUTSIDE HARDENED POSTGRESQL SCOPE |
-| `six` | 1.17.0 | Transitive | `python-dateutil -> six` | MIT | ALLOWED, OUTSIDE HARDENED POSTGRESQL SCOPE |
-| `urllib3` | 2.6.3 | Transitive | `botocore -> urllib3` | MIT | ALLOWED, OUTSIDE HARDENED POSTGRESQL SCOPE |
-
-No blob-test dependency is declared in the supported environment. The
-upstream-derived blob tests remain in the source tree, but their historical
-Moto tooling is not installed or run by the downstream PostgreSQL CI path.
-Blob support is outside the hardened downstream PostgreSQL support scope.
-
 ## Removed standard-path dependencies
 
 | Distribution/path before H09 | Version observed before H09 | Policy issue | H09 result |
@@ -125,8 +105,7 @@ Blob support is outside the hardened downstream PostgreSQL support scope.
 | `mirakuru` | 3.0.2 | LGPL-3.0-or-later transitive of pytest-postgresql | Removed with pytest-postgresql |
 | `black -> pathspec` | 26.1.0 -> 1.0.4 | `pathspec` is MPL-2.0 | Black replaced by Ruff |
 | `hatchling -> pathspec` | Unpinned build isolation -> 1.0.4 observed | `pathspec` is MPL-2.0 | Hatchling replaced by Setuptools |
-| `moto -> requests -> certifi` | 5.1.22 -> 2.33.0 -> 2026.2.25 | `certifi` is MPL-2.0; blob test stack was also outside target scope | Moto removed from standard development groups |
 
-`uv.lock` no longer contains Black, certifi, Hatchling, mirakuru, Moto,
-pathspec, Psycopg, or pytest-postgresql. None is installed by the canonical
-PostgreSQL development command.
+`uv.lock` no longer contains Black, certifi, Hatchling, mirakuru, pathspec,
+Psycopg, or pytest-postgresql. None is installed by the canonical development
+command.

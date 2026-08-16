@@ -1,4 +1,4 @@
-"""Tests for agent-cow PostgreSQL COW implementation."""
+"""Tests for the agent-cow-postgresql COW implementation."""
 
 import pytest
 

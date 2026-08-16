@@ -1,8 +1,8 @@
 """Optional SQLAlchemy asyncio integration using the safe H04 session scope.
 
-Install ``agent-cow[sqlalchemy]`` to run this example.  SQLAlchemy imports are
-kept inside the example functions so importing this module does not make the
-optional adapter a core dependency.
+Install ``agent-cow-postgresql[sqlalchemy]`` to run this example. SQLAlchemy
+imports are kept inside the example functions so importing this module does
+not make the optional adapter a core dependency.
 
 The caller must supply a trusted, server-selected session UUID.  Transport
 authentication and capability lookup happen before this library boundary.

@@ -1,24 +1,22 @@
-# agent-cow
+# agent-cow-postgresql
 
-**Database Copy-On-Write for AI agent workspace isolation**
+**PostgreSQL Copy-On-Write for AI agent workspace isolation**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Downstream fork
 
-This repository is a downstream fork of
-[`trail-ml/agent-cow-python`](https://github.com/trail-ml/agent-cow-python),
-originally developed by Trail.
-
-The upstream project and this fork are distributed under the MIT license. This
-fork preserves upstream history and attribution while adding PostgreSQL
-correctness, isolation, and integration improvements for AI-agent and
-application-controlled workflows.
+`agent-cow-postgresql` is a PostgreSQL-focused downstream fork of Trail's
+MIT-licensed
+[`agent-cow-python`](https://github.com/trail-ml/agent-cow-python). The
+original `agent-cow` project and core copy-on-write design were created by
+Trail. This fork preserves that history and attribution while independently
+maintaining and hardening the PostgreSQL implementation.
 
 Upstream project: https://github.com/trail-ml/agent-cow-python
 
-`agent-cow` isolates application database writes in a PostgreSQL copy-on-write
-layer until a separate reviewer accepts or discards them.
+`agent-cow-postgresql` isolates application database writes in a PostgreSQL
+copy-on-write layer until a separate reviewer accepts or discards them.
 
 ## Hardened PostgreSQL integration
 
@@ -35,14 +33,14 @@ trusted application
 
 Start with the [PostgreSQL guide](./agentcow/postgres/), then use the
 [security model](./docs/POSTGRES_SECURITY_MODEL.md) to configure separate
-setup, runtime, and reviewer roles. Agent-cow does not authenticate external
-users or capabilities. The application must select the session UUID after
-authorization.
+setup, runtime, and reviewer roles. `agent-cow-postgresql` does not
+authenticate external users or capabilities. The application must select the
+session UUID after authorization.
 
 > Read the full article: [Copy-on-Write in Agentic Systems](https://www.trail-ml.com/blog/agent-cow)
 
 ```
-Without agent-cow:                With agent-cow:
+Without copy-on-write:            With agent-cow-postgresql:
 
 ┌───────┐       ┌──────────┐     ┌───────┐     ┌──────┐     ┌──────────┐
 │ Agent │──────>│ Database │     │ Agent │────>│ COW  │────>│ Database │
@@ -55,11 +53,10 @@ Without agent-cow:                With agent-cow:
 
 ## Installation
 
-The downstream `0.2.0rc1` release candidate is not published to PyPI. The
-distribution name remains `agent-cow`, so `pip install agent-cow` may resolve
-the upstream package rather than this fork. Until the human lead authorizes a
-downstream publication mechanism, install from a pinned fork commit or a wheel
-built from a reviewed source checkout:
+The `0.2.0rc1` release candidate is not published to PyPI. The maintained
+distribution is named `agent-cow-postgresql`; the Python import namespace
+remains `agentcow`. Until the human lead authorizes a release, install from a
+reviewed source checkout:
 
 ```bash
 python -m pip install .
@@ -90,12 +87,11 @@ Alignment is an open problem in AI safety, and [misalignment during agent execut
 - **Multiple agents or agent sessions** can run simultaneously on isolated copies without interfering with each other.
 </details>
 
-## Backends
-| Backend | Docs | Status |
-|---------|------|--------|
-| **PostgreSQL** | [agentcow/postgres](./agentcow/postgres/) | Hardened downstream path |
-| **pg-lite (TypeScript)** | [agent-cow-typescript](https://github.com/trail-ml/agent-cow-ts) | Available |
-| **Blob/File Storage** | — | Upstream-derived; outside the hardened PostgreSQL support scope |
+## PostgreSQL backend
+
+PostgreSQL is the single maintained backend. See the
+[`agentcow.postgres` guide](./agentcow/postgres/) for deployment, role
+hardening, runtime sessions, conflict review, and atomic promotion.
 
 ## Quick Example (PostgreSQL)
 
@@ -165,24 +161,23 @@ recommended request integration.
 ## Development
 
 ```bash
-git clone https://github.com/jpers1/agent-cow-python.git
-cd agent-cow-python
+git clone https://github.com/jpers1/agent-cow-postgresql.git
+cd agent-cow-postgresql
 uv sync --frozen --group dev
 uv run python scripts/check_dependency_policy.py
 uv run pytest agentcow/postgres/tests/ -v
 ```
 
-The supported development group covers the hardened PostgreSQL subsystem and
+The supported development group covers the complete maintained package and
 uses a permissive-only Python dependency set. Ruff is the formatter/checker;
-package builds use Setuptools. Inherited blob tests and their separate tooling
-are outside this standard downstream path. See the
+package builds use Setuptools. See the
 [dependency policy](./docs/DEPENDENCY_POLICY.md) and
 [inventory](./docs/DEPENDENCY_INVENTORY.md).
 
 ## Contributing
 
 For downstream questions, bug reports, or feature requests, use this fork's
-[issue tracker](https://github.com/jpers1/agent-cow-python/issues).
+[issue tracker](https://github.com/jpers1/agent-cow-postgresql/issues).
 
 ## License
 
@@ -191,4 +186,4 @@ MIT License.
 ## Credits
 
 Originally created by [Trail](https://trail-ml.com). This downstream fork is
-maintained by `jpers1` while preserving upstream history and attribution.
+maintained by Janez Perš while preserving upstream history and attribution.
