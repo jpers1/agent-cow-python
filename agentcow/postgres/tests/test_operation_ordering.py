@@ -148,7 +148,7 @@ async def test_commit_upsert_and_delete_phases_use_same_latest_row(
     seeded_executor.commit()
 
     await seeded_executor.execute(
-        "SELECT commit_cow_upsert("
+        "SELECT agentcow.commit_cow_upsert("
         f"'public', 'users_base', ARRAY['id'], '{session_id}'::uuid)"
     )
     upsert_rows = await seeded_executor.execute(
@@ -163,7 +163,7 @@ async def test_commit_upsert_and_delete_phases_use_same_latest_row(
     assert upsert_rows == ([] if upsert_expected is None else [(upsert_expected,)])
 
     await seeded_executor.execute(
-        "SELECT commit_cow_delete("
+        "SELECT agentcow.commit_cow_delete("
         f"'public', 'users_base', ARRAY['id'], '{session_id}'::uuid)"
     )
     final_rows = await seeded_executor.execute(

@@ -84,6 +84,30 @@ their historical order cannot be reconstructed safely. Applications must
 commit or discard those rows with the previous version before retrying the
 upgrade.
 
+### H02 implementation status and design
+
+H02 places deployed control functions in the dedicated `agentcow` schema and
+qualifies every call to those functions. Each COW-enabled application schema
+owns its own `cow_dirty_tables` registry, `_cow_operation_order_seq`, changes
+tables, overlay views, and generated trigger functions. Generated SQL uses
+quoted, schema-qualified identifiers, and deployed functions run with
+`search_path = pg_catalog`.
+
+Agent-cow internal PostgreSQL objects are therefore explicitly
+schema-resolved and do not depend on application-controlled `search_path`.
+Temporary or attacker-schema objects with the same names cannot redirect dirty
+tracking, commit, discard, dependency discovery, or teardown. Existing
+`public` installations retain their registry in `public`; H01-era registry
+entries for a non-public application schema are moved transactionally into
+that schema when the enabled table is redeployed.
+
+H03 must still define and test ownership, `USAGE`, `EXECUTE`, and table/sequence
+grants for the control and application schemas. H02 grants `PUBLIC` only
+`USAGE` on the new control schema to preserve the accessibility of helpers
+historically deployed in `public`; existing default function `EXECUTE`
+behavior is otherwise unchanged. H02 intentionally does not redesign
+PostgreSQL roles or change the current security-invoker model.
+
 This ordering may change after review, but work should remain PR-sized. Tests
 for a hardening item should be introduced with its corresponding fix rather
 than publishing private audit artifacts independently.
