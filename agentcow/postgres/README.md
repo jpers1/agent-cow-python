@@ -22,134 +22,142 @@ For SQLAlchemy support:
 pip install agent-cow[sqlalchemy]
 ```
 
-## Quick Start
+## Recommended hardened integration
 
-### 1. Create a setup executor
+Use three existing PostgreSQL roles with distinct credentials:
 
-Administrative and review APIs work with any async PostgreSQL driver through
-the low-level `Executor` protocol. Wrap a caller-managed connection with an
-`async execute(sql) -> list[tuple]` method:
+| Role | Purpose |
+| --- | --- |
+| Setup / owner | Own application tables; deploy, enable, harden, and validate COW |
+| Runtime | CRUD only through COW views with trusted transaction context |
+| Reviewer | Controlled inspection and commit/discard after authorization |
 
-```python
-# asyncpg
-class AsyncpgExecutor:
-    def __init__(self, conn):
-        self._conn = conn
+The setup owner can be a non-superuser. A PostgreSQL administrator may be
+needed only for initial database and role creation. The example below assumes
+the setup role already owns the `content` schema and its application tables.
 
-    async def execute(self, sql: str) -> list[tuple]:
-        return [tuple(r) for r in await self._conn.fetch(sql)]
-
-
-# SQLAlchemy AsyncSession
-class SAExecutor:
-    def __init__(self, session):
-        self._s = session
-
-    async def execute(self, sql: str) -> list[tuple]:
-        from sqlalchemy import text
-        result = await self._s.execute(text(sql))
-        return [tuple(row) for row in result.fetchall()] if result.returns_rows else []
-```
-
-### 2. One-time setup
-
-Deploy the COW functions to your database and enable COW on your tables:
+### 1. Deploy, enable, harden, and validate
 
 ```python
-from agentcow.postgres import deploy_cow_functions, enable_cow_schema
+import asyncpg
 
-executor = AsyncpgExecutor(conn)
+from agentcow.postgres import (
+    deploy_cow_functions,
+    enable_cow_schema,
+    harden_cow_schema,
+    validate_cow_schema_privileges,
+)
+from agentcow.postgres.examples.asyncpg_safe_session_example import AsyncpgExecutor
 
-await deploy_cow_functions(executor)
-await enable_cow_schema(executor, schema="public", exclude={"alembic_version"})
-# Returns: ["users", "orders", "products", ...]
+setup_connection = await asyncpg.connect(SETUP_DATABASE_URL)
+try:
+    async with setup_connection.transaction():
+        setup = AsyncpgExecutor(setup_connection)
+        await deploy_cow_functions(setup)
+        await enable_cow_schema(
+            setup, schema="content", exclude={"alembic_version"}
+        )
+        await harden_cow_schema(
+            setup,
+            schema="content",
+            runtime_roles=["application_runtime"],
+            reviewer_roles=["application_reviewer"],
+        )
+        validation = await validate_cow_schema_privileges(
+            setup,
+            schema="content",
+            runtime_roles=["application_runtime"],
+            reviewer_roles=["application_reviewer"],
+        )
+        if not validation["safe"]:
+            raise RuntimeError(validation["violations"])
+finally:
+    await setup_connection.close()
 ```
 
-If you only need COW on specific tables:
+Hardening revokes runtime access to base tables, changes tables, registries,
+sequences, and management functions. It grants runtime CRUD only on the COW
+views. See the [security model](../../docs/POSTGRES_SECURITY_MODEL.md) for the
+complete privilege contract.
 
-```python
-from agentcow.postgres import enable_cow
+### 2. Resolve application identity and run runtime CRUD
 
-await enable_cow(executor, "users")
-await enable_cow(executor, "orders")
-```
-
-Writes fail closed by default unless both transaction-local COW identifiers
-are set. Production deployments should also configure the explicit role
-boundary described in
-[`docs/POSTGRES_SECURITY_MODEL.md`](../../docs/POSTGRES_SECURITY_MODEL.md).
-
-### 3. Run an agent session
-
-Use the transaction-owning asyncpg API for the preferred runtime path. The
-application must select `session_id` from trusted server-side state; never use
-an untrusted request value as database identity.
+Agent-cow does not authenticate external users or capabilities. The
+application must select the session UUID after authorization.
 
 ```python
 from agentcow.postgres import asyncpg_cow_session
 
-async with asyncpg_cow_session(
-    application_pool,
-    session_id=server_selected_session_id,
-) as cow:
-    # One acquired connection and one explicit transaction are already active.
-    await cow.execute(
-        "INSERT INTO users (name, email) "
-        "VALUES ('Bessie', 'bessie@sunnymeadow.farm')"
-    )
+runtime_pool = await asyncpg.create_pool(RUNTIME_DATABASE_URL)
 
-    # Rotate to another logical action. Omit the UUID to generate one.
-    await cow.set_operation()
+# The capability is opaque transport input. The returned UUID is server-owned.
+trusted_session_id = await application_session_store.resolve(external_capability)
+
+async with asyncpg_cow_session(
+    runtime_pool,
+    session_id=trusted_session_id,
+) as cow:
     await cow.execute(
-        "UPDATE users SET email = 'bessie@rollinghills.farm' "
-        "WHERE name = 'Bessie'"
+        "INSERT INTO content.pages (id, title) VALUES (1, 'Draft')"
+    )
+    await cow.set_operation()  # new library-generated logical operation UUID
+    await cow.execute(
+        "UPDATE content.pages SET title = 'Revised' WHERE id = 1"
     )
 ```
 
-Normal exit commits the request transaction (the isolated change rows, not a
-promotion to canonical state). Exceptions, cancellation, or
-`await cow.rollback()` roll it back. The equivalent
-`sqlalchemy_cow_session(...)` API supports SQLAlchemy asyncio engines,
-connections, sessions, and `async_sessionmaker`.
+The pool must authenticate as `application_runtime`, not as the setup or
+reviewer role. One connection and one explicit transaction are owned by the
+scope. Normal exit commits isolated change rows; exceptions, cancellation, or
+`await cow.rollback()` roll them back. The connection is checked for stale or
+leaked context before release.
 
-Both APIs reject stale context, apply and validate transaction-local settings,
-and verify the connection is clean before pool release. Production data is
-untouched until a separate authorized review operation promotes changes.
+The optional `sqlalchemy_cow_session(...)` adapter provides equivalent
+lifecycle guarantees for SQLAlchemy asyncio engines, connections, sessions,
+and `async_sessionmaker`. Psycopg and other drivers retain the low-level
+`Executor` API but do not have H04 transaction-lifecycle guarantees.
 
-Adapter support is intentionally explicit:
+### 3. Inspect and promote with the reviewer role
 
-- `asyncpg.Connection` and `asyncpg.Pool` are the preferred first-class path;
-- SQLAlchemy `AsyncEngine`, `AsyncConnection`, `AsyncSession`, and
-  `async_sessionmaker` are supported by the optional SQLAlchemy integration;
-- psycopg and other drivers remain compatible with the low-level `Executor`
-  API, but do not yet have a transaction-owning high-level adapter. They must
-  not be represented as having H04 lifecycle guarantees.
-
-### 4. Review and commit
-
-After the session, inspect what the agent did and selectively commit or discard:
+Promotion follows application or human authorization and uses separate
+reviewer credentials:
 
 ```python
 from agentcow.postgres import (
-    get_session_operations,
+    commit_cow_session_schema,
+    discard_cow_session_schema,
     get_operation_dependencies,
-    commit_cow_operations,
-    discard_cow_operations,
-    commit_cow_session,
+    get_session_operations,
 )
 
-ops = await get_session_operations(executor, session_id)
-deps = await get_operation_dependencies(executor, session_id)
-# ops:  [UUID('aaa...'), UUID('bbb...'), UUID('ccc...')]
-# deps: [(UUID('aaa...'), UUID('bbb...')), ...]  — bbb depends on aaa
+reviewer_connection = await asyncpg.connect(REVIEWER_DATABASE_URL)
+try:
+    async with reviewer_connection.transaction():
+        reviewer = AsyncpgExecutor(reviewer_connection)
+        operations = await get_session_operations(
+            reviewer, trusted_session_id, schema="content"
+        )
+        dependencies = await get_operation_dependencies(
+            reviewer, trusted_session_id, schema="content"
+        )
 
-# Cherry-pick: commit the good operations, discard the rest
-await commit_cow_operations(executor, "users", session_id, [ops[0]])
-await discard_cow_operations(executor, "users", session_id, [ops[1], ops[2]])
-
-# Or commit everything at once
-await commit_cow_session(executor, "users", session_id)
+        if application_or_human_approved:
+            await commit_cow_session_schema(
+                reviewer, trusted_session_id, schema="content"
+            )
+        else:
+            await discard_cow_session_schema(
+                reviewer, trusted_session_id, schema="content"
+            )
+finally:
+    await reviewer_connection.close()
 ```
+
+The runtime role cannot inspect internal tables or promote changes. H06 will
+address built-in concurrent-conflict detection; current applications must
+apply their accepted conflict policy before authorizing promotion. H07 will
+provide a higher-level promotion transaction API, so the reviewer example
+owns its connection and explicit transaction directly for now.
 
 ## How It Works
 
@@ -158,9 +166,11 @@ await commit_cow_session(executor, "users", session_id)
 3. **Creates a COW view** named `users` that merges base + changes
 4. **Your code doesn't change** — queries still target `users` (now a view)
 
-When you set `app.session_id` and `app.operation_id` via `SET LOCAL`, all writes go to the changes table. Reads automatically merge base data with your session's changes. Other sessions (and production) see only the base data. This all happens at the SQL layer — no application-level query routing required.
-
-See the [interactive demo](https://www.agent-cow.com) for a worked example of a farm inventory management system where an agent makes both good and bad decisions.
+The safe session scope applies trusted transaction-local session and operation
+context. Writes go to the changes table, while reads merge canonical state with
+that session's changes. Other sessions and canonical readers see only base
+data. PostgreSQL custom GUC values are trusted application state, not an
+authentication mechanism.
 
 ## Web Framework Integration
 
@@ -187,24 +197,34 @@ async def cow_middleware(request: Request, call_next):
 ```
 
 Do not treat client-supplied headers, bearer tokens, or route parameters as
-session UUIDs. The historical header parser is retained only as a clearly
-marked compatibility example; it is not a production authorization boundary.
+session UUIDs. The resolver must authenticate transport input and return a
+server-owned database identity.
 
-Low-level integrations may still build `SET LOCAL` statements directly:
+## Patterns not recommended for hardened deployments
 
-```python
-from agentcow.postgres import build_cow_variable_statements
+- Passing `session_id` directly from an untrusted HTTP header or request field.
+- Using raw `SET LOCAL` in autocommit mode.
+- Giving the runtime role direct base-table, changes-table, registry, or
+  sequence privileges.
+- Sharing setup, runtime, and reviewer credentials or exposing database
+  credentials to an agent.
+- Enabling `allow_unsafe_canonical_writes=True` for agent-facing traffic.
+- Exposing arbitrary SQL or `CowSession.native` to an external agent.
 
-stmts = build_cow_variable_statements(session_id, operation_id)
-# ["SET LOCAL app.session_id = '...'", "SET LOCAL app.operation_id = '...'"]
-for stmt in stmts:
-    await conn.execute(stmt)
-```
+`allow_unsafe_canonical_writes=True` exists only as a compatibility option for
+trusted canonical application workflows. It restores the historical behavior
+in which a write without active COW context reaches canonical state. It is not
+appropriate for an agent-facing runtime and is incompatible with the hardened
+role model.
 
-That path is responsible for acquiring one physical connection, beginning and
-ending one explicit transaction, validating context, handling cancellation,
-and cleaning pooled state. Raw `SET LOCAL` in autocommit mode is unsupported
-for safe COW writes.
+## Advanced low-level integration
+
+`Executor`, `apply_cow_variables(...)`, and
+`build_cow_variable_statements(...)` remain available for administrative,
+reviewer, and advanced adapter code. They do not acquire a connection, begin a
+transaction, validate context, handle cancellation, or clean a pooled
+connection. Runtime code should use an H04 safe session scope unless it
+independently implements every lifecycle guarantee.
 
 ## API Reference
 

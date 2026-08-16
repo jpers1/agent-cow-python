@@ -18,10 +18,29 @@ applications including SLAIF Agent-State.
 
 Upstream project: https://github.com/trail-ml/agent-cow-python
 
-`agent-cow` intercepts your AI agent's database writes and isolates them in a copy-on-write layer. The agent thinks it's modifying real data, but nothing touches production until you approve. Zero changes to your existing queries.
+`agent-cow` isolates application database writes in a PostgreSQL copy-on-write
+layer until a separate reviewer accepts or discards them.
+
+## Hardened PostgreSQL integration
+
+The downstream recommended path is:
+
+```text
+trusted application
+  -> hardened runtime role
+  -> asyncpg pool
+  -> asyncpg_cow_session(...)
+  -> server-owned session UUID
+  -> controlled CRUD through COW views
+```
+
+Start with the [PostgreSQL guide](./agentcow/postgres/), then use the
+[security model](./docs/POSTGRES_SECURITY_MODEL.md) to configure separate
+setup, runtime, and reviewer roles. Agent-cow does not authenticate external
+users or capabilities. The application must select the session UUID after
+authorization.
 
 > Read the full article: [Copy-on-Write in Agentic Systems](https://www.trail-ml.com/blog/agent-cow)
-> Try the interactive demo: [www.agent-cow.com](https://www.agent-cow.com)
 
 ```
 Without agent-cow:                With agent-cow:
@@ -50,9 +69,9 @@ Requires Python 3.10+.
 3. **Creates a COW view** named `users` that merges base + changes
 4. **Your code doesn't change** — queries still target `users` (now a view)
 
-When you set `app.session_id` and `app.operation_id` variables, all writes go to the changes table. Reads automatically merge base data with your session's changes. Other sessions (and production) see only the base data.
-
-See the [interactive demo](https://www.agent-cow.com) for a worked example of an inventory management system where an agent makes both good and bad decisions.
+The recommended session API applies server-selected transaction-local context,
+routes writes into the changes table, and merges those changes into reads for
+that session. Other sessions and canonical readers see only base data.
 
 <details>
 <summary><strong>Why Copy-on-Write for agents?</strong></summary>
@@ -68,46 +87,34 @@ Alignment is an open problem in AI safety, and [misalignment during agent execut
 ## Backends
 | Backend | Docs | Status |
 |---------|------|--------|
-| **PostgreSQL** | [agentcow/postgres](https://github.com/trail-ml/agent-cow-python/tree/main/agentcow/postgres) | Available |
+| **PostgreSQL** | [agentcow/postgres](./agentcow/postgres/) | Hardened downstream path |
 | **pg-lite (TypeScript)** | [agent-cow-typescript](https://github.com/trail-ml/agent-cow-ts) | Available |
-| **Blob/File Storage** | — | In progress |
+| **Blob/File Storage** | — | Upstream-derived; not a SLAIF integration target |
 
 ## Quick Example (PostgreSQL)
 
 ```python
-from agentcow.postgres import (
-    asyncpg_cow_session,
-    deploy_cow_functions,
-    enable_cow_schema,
-    commit_cow_session,
-)
+import asyncpg
 
-# Wrap any async PostgreSQL driver — asyncpg, SQLAlchemy, psycopg, etc.
-class MyExecutor:
-    def __init__(self, conn):
-        self._conn = conn
-    async def execute(self, sql: str) -> list[tuple]:
-        return [tuple(r) for r in await self._conn.fetch(sql)]
+from agentcow.postgres import asyncpg_cow_session
 
-executor = MyExecutor(conn)
+# Authorization and capability lookup are application responsibilities.
+trusted_session_id = await application_session_store.resolve(external_capability)
+runtime_pool = await asyncpg.create_pool(RUNTIME_DATABASE_URL)
 
-# One-time setup — enables COW on all tables in the schema
-await deploy_cow_functions(executor)
-await enable_cow_schema(executor)
-
-# Agent request — trusted application code supplies the server-selected UUID.
-# One pooled connection and one explicit transaction are managed automatically.
-async with asyncpg_cow_session(
-    application_pool,
-    session_id=server_selected_session_id,
-) as cow:
-    await cow.execute("INSERT INTO users (name) VALUES ('Bessie')")
-
-# Review separately with the configured reviewer role, then commit or discard.
-await commit_cow_session(reviewer_executor, "users", server_selected_session_id)
+try:
+    async with asyncpg_cow_session(
+        runtime_pool,
+        session_id=trusted_session_id,
+    ) as cow:
+        await cow.execute("INSERT INTO content.pages (id, title) VALUES (1, 'Draft')")
+finally:
+    await runtime_pool.close()
 ```
 
-See the [PostgreSQL docs](./agentcow/postgres/) for the full guide: driver adapters, schema-wide setup, selective commit, web framework integration, and the complete API reference.
+The pool authenticates as the hardened runtime role. Setup and promotion use
+separate roles and controlled APIs. See the [PostgreSQL docs](./agentcow/postgres/)
+for the complete deployment, runtime, and reviewer example.
 
 ## API Reference
 
@@ -122,9 +129,9 @@ See the [PostgreSQL docs](./agentcow/postgres/) for the full guide: driver adapt
 - `discard_cow_session(executor, table_name, session_id)` — Discard all session changes
 - `get_cow_status(executor)` — Get COW status for a schema
 
-### Operation-Level Functions
+### Advanced and review functions
 
-- `apply_cow_variables(executor, session_id, operation_id)` — Low-level caller-managed transaction helper
+- `apply_cow_variables(executor, session_id, operation_id)` — Advanced low-level caller-managed transaction helper
 - `get_session_operations(executor, session_id)` — List all operations in a session
 - `get_operation_dependencies(executor, session_id)` — Get operation dependency graph
 - `commit_cow_operations(executor, table_name, session_id, operation_ids)` — Commit specific operations
@@ -135,17 +142,16 @@ See the [PostgreSQL docs](./agentcow/postgres/) for the full guide: driver adapt
 - `asyncpg_cow_session(connection_or_pool, session_id=...)` — Recommended transaction-owning asyncpg request scope
 - `sqlalchemy_cow_session(engine_or_session, session_id=...)` — Equivalent optional SQLAlchemy async scope
 - `CowPostgresConfig` — Dataclass for COW configuration
-- `build_cow_variable_statements(session_id, operation_id)` — Build SET LOCAL SQL statements
+- `build_cow_variable_statements(session_id, operation_id)` — Build low-level transaction-local context statements
 
-Low-level helpers require caller-managed connection and transaction safety.
-The historical HTTP-header parser is retained as a compatibility example, not
-as a production authorization boundary; applications must resolve untrusted
-transport credentials to server-owned session UUIDs.
+Low-level helpers require caller-managed connection, explicit transaction,
+context validation, cancellation, and pool-cleanup safety. They are not the
+recommended request integration.
 
 ## Development
 
 ```bash
-git clone https://github.com/trail-ml/agent-cow-python.git
+git clone https://github.com/jpers1/agent-cow-python.git
 cd agent-cow-python
 pip install -e ".[dev]"
 pytest agentcow/postgres/tests/ -v
@@ -153,7 +159,8 @@ pytest agentcow/postgres/tests/ -v
 
 ## Contributing
 
-We welcome contributions! For questions, bug reports, or feature requests, please [open an issue](https://github.com/trail-ml/agent-cow-python/issues).
+For downstream questions, bug reports, or feature requests, use this fork's
+[issue tracker](https://github.com/jpers1/agent-cow-python/issues).
 
 ## License
 
@@ -161,4 +168,5 @@ MIT License.
 
 ## Credits
 
-Created and maintained by [trail](https://trail-ml.com).
+Originally created by [Trail](https://trail-ml.com). This downstream fork is
+maintained by `jpers1` while preserving upstream history and attribution.
