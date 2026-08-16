@@ -38,6 +38,8 @@ from .operations import (
     list_user_tables_sql,
     list_base_tables_sql,
     list_changes_tables_sql,
+    list_enabled_cow_tables_sql,
+    check_table_has_any_rows_sql,
     commit_cow_session_sql,
     discard_cow_session_sql,
     commit_cow_operations_sql,
@@ -154,7 +156,34 @@ def _topologically_sort_tables(
 
 
 async def deploy_cow_functions(executor: Executor) -> None:
-    """Deploy the required PL/pgSQL helper functions to the database."""
+    """Deploy the required PL/pgSQL helper functions to the database.
+
+    Existing upstream-format COW tables are upgraded only when their changes
+    tables are empty. Pending rows cannot be assigned a truthful historical
+    order, so deployment fails before replacing any function in that case.
+    """
+    enabled_tables: list[tuple[str, str, str, list[str]]] = []
+    for (
+        schema,
+        view_name,
+        base_table,
+        changes_table,
+        has_order,
+    ) in await executor.execute(list_enabled_cow_tables_sql()):
+        if not has_order:
+            rows = await executor.execute(
+                check_table_has_any_rows_sql(schema, changes_table)
+            )
+            if rows and rows[0][0]:
+                raise RuntimeError(
+                    "Cannot upgrade deterministic COW ordering for "
+                    f"{schema}.{view_name}: {schema}.{changes_table} contains "
+                    "pending legacy changes. Commit or discard them with the "
+                    "previous agent-cow version before deploying this version."
+                )
+        pk_cols = await _get_pk_cols(executor, schema, base_table)
+        enabled_tables.append((schema, view_name, base_table, pk_cols))
+
     for sql in (
         COW_CHANGES_TABLE_NAME_SQL,
         CREATE_DIRTY_TABLES_SQL,
@@ -171,6 +200,9 @@ async def deploy_cow_functions(executor: Executor) -> None:
         GET_COW_FK_EDGES_SQL,
     ):
         await executor.execute(sql)
+
+    for schema, view_name, base_table, pk_cols in enabled_tables:
+        await executor.execute(setup_cow_sql(schema, base_table, view_name, pk_cols))
 
 
 # ---------------------------------------------------------------------------
@@ -199,13 +231,15 @@ async def enable_cow(
     """
     base_table = f"{table_name}_base"
 
-    if pk_cols is None:
-        pk_cols = await _get_pk_cols(executor, schema, table_name)
-
     rows = await executor.execute(check_cow_state_sql(schema, table_name, base_table))
     base_exists, original_is_table, view_exists = rows[0]
 
+    if pk_cols is None:
+        pk_source = base_table if base_exists else table_name
+        pk_cols = await _get_pk_cols(executor, schema, pk_source)
+
     if base_exists and view_exists:
+        await executor.execute(setup_cow_sql(schema, base_table, table_name, pk_cols))
         if allow_deferred_fks:
             await executor.execute(
                 alter_fk_constraints_deferrable_sql(schema, base_table)
@@ -287,6 +321,14 @@ async def enable_cow_schema(
         row[0].removesuffix("_base")
         for row in await executor.execute(list_base_tables_sql(schema))
     }
+
+    for table_name in sorted(already_cow - exclude):
+        await enable_cow(
+            executor,
+            table_name,
+            schema=schema,
+            allow_deferred_fks=allow_deferred_fks,
+        )
 
     enabled: list[str] = []
     for (table_name,) in rows:

@@ -221,6 +221,46 @@ def list_changes_tables_sql(schema: str) -> str:
     )
 
 
+def list_enabled_cow_tables_sql() -> str:
+    """List COW view/base/changes triples and ordering-column state.
+
+    The query is used before function deployment so legacy enabled tables can
+    be rejected or migrated without partially replacing their SQL functions.
+    """
+    return (
+        "SELECT changes.table_schema, "
+        "regexp_replace(changes.table_name, '_changes$', '') AS view_name, "
+        "regexp_replace(changes.table_name, '_changes$', '') || '_base' "
+        "AS base_table, "
+        "changes.table_name, "
+        "EXISTS(SELECT 1 FROM information_schema.columns cols "
+        "WHERE cols.table_schema = changes.table_schema "
+        "AND cols.table_name = changes.table_name "
+        "AND cols.column_name = '_cow_order') AS has_order "
+        "FROM information_schema.tables changes "
+        "WHERE changes.table_type = 'BASE TABLE' "
+        "AND right(changes.table_name, 8) = '_changes' "
+        "AND EXISTS(SELECT 1 FROM information_schema.tables base "
+        "WHERE base.table_schema = changes.table_schema "
+        "AND base.table_name = "
+        "regexp_replace(changes.table_name, '_changes$', '') || '_base' "
+        "AND base.table_type = 'BASE TABLE') "
+        "AND EXISTS(SELECT 1 FROM information_schema.views view_ "
+        "WHERE view_.table_schema = changes.table_schema "
+        "AND view_.table_name = "
+        "regexp_replace(changes.table_name, '_changes$', '')) "
+        "ORDER BY changes.table_schema, changes.table_name"
+    )
+
+
+def check_table_has_any_rows_sql(schema: str, table_name: str) -> str:
+    """SQL to check whether a schema-qualified table contains any row."""
+    return (
+        f"SELECT EXISTS(SELECT 1 FROM {_quote_ident(schema)}."
+        f"{_quote_ident(table_name)} LIMIT 1)"
+    )
+
+
 def check_table_has_changes_sql(
     schema: str,
     changes_table: str,

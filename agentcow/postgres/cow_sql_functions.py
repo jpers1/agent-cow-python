@@ -4,6 +4,9 @@ PostgreSQL PL/pgSQL function definitions for COW (Copy-On-Write).
 All functions are deployed to the database via ``deploy_cow_functions()``.
 """
 
+COW_ORDER_COLUMN = "_cow_order"
+COW_ORDER_SEQUENCE_NAME = "_cow_operation_order_seq"
+
 COW_CHANGES_TABLE_NAME_SQL = """
 CREATE OR REPLACE FUNCTION _cow_changes_table_name(p_base_table text)
 RETURNS text
@@ -43,6 +46,9 @@ DECLARE
     qual_base            text := format('%I.%I', p_schema, p_base_table);
     qual_changes         text := format('%I.%I', p_schema, changes_table_name);
     qual_view            text := format('%I.%I', p_schema, p_view_name);
+    order_sequence_name  text := '_cow_operation_order_seq';
+    qual_order_sequence  text := format('%I.%I', p_schema, order_sequence_name);
+    order_sequence_comment text := 'agent-cow deterministic operation order';
 
     col_list             text;
     col_list_prefixed_b  text;
@@ -65,8 +71,17 @@ DECLARE
     upsert_fn_name       text := p_view_name || '_cow_upsert';
     delete_fn_name       text := p_view_name || '_cow_delete';
     base_table_owner     text;
+    schema_owner         text;
     base_on_conflict     text;
     changes_on_conflict  text;
+    order_sequence_exists boolean;
+    existing_sequence_comment text;
+    has_order_column     boolean;
+    has_pending_changes  boolean;
+    order_table          RECORD;
+    max_order            bigint := 0;
+    table_max_order      bigint;
+    sequence_last_value  bigint;
 BEGIN
     pk_cols_quoted := (SELECT string_agg(quote_ident(col), ', ') FROM unnest(p_pk_cols) col);
     pk_join_condition := (SELECT string_agg(format('c2.%I = b.%I', col, col), ' AND ') FROM unnest(p_pk_cols) col);
@@ -77,7 +92,53 @@ BEGIN
     pk_delete_condition := (SELECT string_agg(format('%I = OLD.%I', col, col), ' AND ') FROM unnest(p_pk_cols) col);
     pk_old_values := (SELECT string_agg(format('OLD.%I', col), ', ') FROM unnest(p_pk_cols) col);
 
-    -- 1. Create the changes table
+    -- One sequence per schema provides a shared causal order across every COW
+    -- table in that schema. Sequence gaps after rollback are intentional.
+    SELECT EXISTS (
+        SELECT 1
+        FROM pg_class cls
+        JOIN pg_namespace ns ON ns.oid = cls.relnamespace
+        WHERE ns.nspname = p_schema
+          AND cls.relname = order_sequence_name
+          AND cls.relkind = 'S'
+    ) INTO order_sequence_exists;
+
+    IF NOT order_sequence_exists THEN
+        EXECUTE format('CREATE SEQUENCE %s AS bigint', qual_order_sequence);
+        EXECUTE format(
+            'COMMENT ON SEQUENCE %s IS %L',
+            qual_order_sequence, order_sequence_comment
+        );
+
+        SELECT pg_get_userbyid(nspowner) INTO schema_owner
+        FROM pg_namespace
+        WHERE nspname = p_schema;
+
+        IF schema_owner IS NOT NULL THEN
+            EXECUTE format(
+                'ALTER SEQUENCE %s OWNER TO %I',
+                qual_order_sequence, schema_owner
+            );
+        END IF;
+    ELSE
+        SELECT obj_description(cls.oid, 'pg_class')
+        INTO existing_sequence_comment
+        FROM pg_class cls
+        JOIN pg_namespace ns ON ns.oid = cls.relnamespace
+        WHERE ns.nspname = p_schema
+          AND cls.relname = order_sequence_name
+          AND cls.relkind = 'S';
+
+        IF existing_sequence_comment IS DISTINCT FROM order_sequence_comment THEN
+            RAISE EXCEPTION
+                'Sequence %.% already exists but is not managed by agent-cow',
+                p_schema, order_sequence_name
+                USING ERRCODE = '42710';
+        END IF;
+    END IF;
+
+    -- 1. Create the changes table. _cow_updated_at remains timestamp metadata;
+    -- _cow_order is the authoritative operation order.
     EXECUTE format(
         'CREATE TABLE IF NOT EXISTS %s (
            session_id uuid NOT NULL,
@@ -85,10 +146,65 @@ BEGIN
            LIKE %s INCLUDING DEFAULTS INCLUDING GENERATED,
            _cow_deleted boolean NOT NULL DEFAULT false,
            _cow_updated_at timestamptz NOT NULL DEFAULT now(),
+           _cow_order bigint NOT NULL DEFAULT nextval(%L::regclass),
            PRIMARY KEY (session_id, operation_id, %s)
          );',
-        qual_changes, qual_base, pk_cols_quoted
+        qual_changes, qual_base, qual_order_sequence, pk_cols_quoted
     );
+
+    SELECT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = p_schema
+          AND table_name = changes_table_name
+          AND column_name = '_cow_order'
+    ) INTO has_order_column;
+
+    IF NOT has_order_column THEN
+        EXECUTE format(
+            'SELECT EXISTS (SELECT 1 FROM %s LIMIT 1)',
+            qual_changes
+        ) INTO has_pending_changes;
+
+        IF has_pending_changes THEN
+            RAISE EXCEPTION
+                'Cannot add deterministic ordering to %.% while pending legacy COW changes exist; commit or discard them with the previous version first',
+                p_schema, changes_table_name
+                USING ERRCODE = '55000';
+        END IF;
+
+        EXECUTE format(
+            'ALTER TABLE %s ADD COLUMN _cow_order bigint NOT NULL DEFAULT nextval(%L::regclass)',
+            qual_changes, qual_order_sequence
+        );
+    ELSE
+        EXECUTE format(
+            'ALTER TABLE %s ALTER COLUMN _cow_order SET DEFAULT nextval(%L::regclass)',
+            qual_changes, qual_order_sequence
+        );
+    END IF;
+
+    -- If the sequence was restored or recreated, advance it beyond every
+    -- existing value in this schema without inventing order for legacy rows.
+    FOR order_table IN
+        SELECT c.table_name
+        FROM information_schema.columns c
+        WHERE c.table_schema = p_schema
+          AND c.column_name = '_cow_order'
+          AND right(c.table_name, 8) = '_changes'
+    LOOP
+        EXECUTE format(
+            'SELECT COALESCE(MAX(_cow_order), 0) FROM %I.%I',
+            p_schema, order_table.table_name
+        ) INTO table_max_order;
+        max_order := GREATEST(max_order, table_max_order);
+    END LOOP;
+
+    EXECUTE format('SELECT last_value FROM %s', qual_order_sequence)
+        INTO sequence_last_value;
+    IF max_order > sequence_last_value THEN
+        PERFORM setval(qual_order_sequence::regclass, max_order, true);
+    END IF;
 
     SELECT tableowner INTO base_table_owner
     FROM pg_tables
@@ -99,8 +215,8 @@ BEGIN
     END IF;
 
     EXECUTE format(
-        'CREATE INDEX IF NOT EXISTS %I ON %s (session_id, %s)',
-        changes_table_name || '_session_pk_idx',
+        'CREATE INDEX IF NOT EXISTS %I ON %s (session_id, %s, _cow_order DESC)',
+        changes_table_name || '_session_pk_order_idx',
         qual_changes, pk_cols_quoted
     );
 
@@ -154,7 +270,7 @@ BEGIN
                          string_to_array(current_setting('app.visible_operations', true), ',')::uuid[]
                        )
                   )
-            ORDER BY c2._cow_updated_at DESC
+            ORDER BY c2._cow_order DESC
             LIMIT 1
         ) c ON true
         WHERE NULLIF(current_setting('app.session_id', true), '') IS NOT NULL
@@ -173,7 +289,7 @@ BEGIN
                          string_to_array(current_setting('app.visible_operations', true), ',')::uuid[]
                        )
                   )
-            ORDER BY %s, c3._cow_updated_at DESC
+            ORDER BY %s, c3._cow_order DESC
         ) c
         LEFT JOIN %s b ON %s
         WHERE NULLIF(current_setting('app.session_id', true), '') IS NOT NULL
@@ -194,10 +310,10 @@ BEGIN
     -- 4. Upsert trigger function
     IF base_update_set IS NULL OR base_update_set = '' THEN
         base_on_conflict := 'DO NOTHING';
-        changes_on_conflict := 'DO UPDATE SET _cow_deleted = false, _cow_updated_at = now()';
+        changes_on_conflict := 'DO UPDATE SET _cow_deleted = false, _cow_updated_at = now(), _cow_order = EXCLUDED._cow_order';
     ELSE
         base_on_conflict := format('DO UPDATE SET %s', base_update_set);
-        changes_on_conflict := format('DO UPDATE SET %s, _cow_deleted = false, _cow_updated_at = now()', excluded_set_list);
+        changes_on_conflict := format('DO UPDATE SET %s, _cow_deleted = false, _cow_updated_at = now(), _cow_order = EXCLUDED._cow_order', excluded_set_list);
     END IF;
 
     EXECUTE format($f$
@@ -274,7 +390,9 @@ BEGIN
                 INSERT INTO %s (session_id, operation_id, %s, _cow_deleted, _cow_updated_at)
                 VALUES (sess, op_id, %s, true, now())
                 ON CONFLICT (session_id, operation_id, %s) DO UPDATE
-                    SET _cow_deleted = true, _cow_updated_at = now();
+                    SET _cow_deleted = true,
+                        _cow_updated_at = now(),
+                        _cow_order = EXCLUDED._cow_order;
 
                 INSERT INTO cow_dirty_tables (schema_name, session_id, table_name)
                 VALUES (TG_TABLE_SCHEMA, sess, TG_TABLE_NAME)
@@ -349,9 +467,9 @@ BEGIN
                 FROM %s
                 WHERE session_id = $1
                   AND ($2::uuid[] IS NULL OR operation_id = ANY($2))
-                  AND _cow_deleted = FALSE
-                ORDER BY %s, _cow_updated_at DESC
+                ORDER BY %s, _cow_order DESC
             ) latest
+            WHERE latest._cow_deleted = FALSE
             ON CONFLICT (%s) DO NOTHING
         $sql$, qual_base, col_list, pk_cols_quoted, qual_changes, pk_cols_quoted, pk_cols_quoted)
         USING p_session, p_operation_ids;
@@ -363,9 +481,9 @@ BEGIN
                 FROM %s
                 WHERE session_id = $1
                   AND ($2::uuid[] IS NULL OR operation_id = ANY($2))
-                  AND _cow_deleted = FALSE
-                ORDER BY %s, _cow_updated_at DESC
+                ORDER BY %s, _cow_order DESC
             ) latest
+            WHERE latest._cow_deleted = FALSE
             ON CONFLICT (%s) DO UPDATE SET %s
         $sql$, qual_base, col_list, pk_cols_quoted, qual_changes, pk_cols_quoted, pk_cols_quoted, update_set_clause)
         USING p_session, p_operation_ids;
@@ -401,7 +519,7 @@ BEGIN
             FROM %s
             WHERE session_id = $1
               AND ($2::uuid[] IS NULL OR operation_id = ANY($2))
-            ORDER BY %s, _cow_updated_at DESC
+            ORDER BY %s, _cow_order DESC
         ) c
         WHERE c._cow_deleted = TRUE AND %s
     $sql$, qual_base, pk_cols_quoted, qual_changes, pk_cols_quoted, pk_join_condition)
@@ -516,6 +634,7 @@ DECLARE
     changes_table_name text := p_view_name || '_changes';
     upsert_fn_name     text := p_view_name || '_cow_upsert';
     delete_fn_name     text := p_view_name || '_cow_delete';
+    order_sequence_is_managed boolean;
     r                  RECORD;
 BEGIN
     -- Revert FK constraints on the base table to NOT DEFERRABLE, undoing
@@ -546,6 +665,30 @@ BEGIN
 
     DELETE FROM cow_dirty_tables
     WHERE schema_name = p_schema AND table_name = p_view_name;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = p_schema
+          AND column_name = '_cow_order'
+          AND right(table_name, 8) = '_changes'
+    ) THEN
+        SELECT obj_description(cls.oid, 'pg_class') =
+               'agent-cow deterministic operation order'
+        INTO order_sequence_is_managed
+        FROM pg_class cls
+        JOIN pg_namespace ns ON ns.oid = cls.relnamespace
+        WHERE ns.nspname = p_schema
+          AND cls.relname = '_cow_operation_order_seq'
+          AND cls.relkind = 'S';
+
+        IF COALESCE(order_sequence_is_managed, false) THEN
+            EXECUTE format(
+                'DROP SEQUENCE %I.%I',
+                p_schema, '_cow_operation_order_seq'
+            );
+        END IF;
+    END IF;
 END;
 $$;
 """
@@ -616,7 +759,7 @@ BEGIN
              AND %s
              AND a.operation_id != b.operation_id
             WHERE a.session_id = $1
-              AND a._cow_updated_at < b._cow_updated_at
+              AND a._cow_order < b._cow_order
         $q$, p_schema, tbl.table_name, p_schema, tbl.table_name, pk_join_condition);
     END LOOP;
 
@@ -657,20 +800,20 @@ BEGIN
                 fk_query := fk_query || format($q$
                     SELECT a.operation_id as dep_on, b.operation_id as op_id
                     FROM (
-                        SELECT operation_id, %I, MIN(_cow_updated_at) as earliest_change
+                        SELECT operation_id, %I, MIN(_cow_order) as earliest_order
                         FROM %I.%I
                         WHERE session_id = $1 AND _cow_deleted = false
                         GROUP BY operation_id, %I
                     ) a
                     JOIN (
-                        SELECT operation_id, %I, MIN(_cow_updated_at) as earliest_change
+                        SELECT operation_id, %I, MIN(_cow_order) as earliest_order
                         FROM %I.%I
                         WHERE session_id = $1 AND _cow_deleted = false
                         GROUP BY operation_id, %I
                     ) b
                       ON a.%I = b.%I
                      AND a.operation_id != b.operation_id
-                     AND a.earliest_change < b.earliest_change
+                     AND a.earliest_order < b.earliest_order
                 $q$,
                     fk.referenced_column,
                     p_schema, referenced_changes_table,
@@ -719,7 +862,10 @@ BEGIN
         END IF;
 
         query := query || format($q$
-            SELECT operation_id, MIN(_cow_updated_at) as earliest_change
+            SELECT
+                operation_id,
+                MIN(_cow_order) as earliest_order,
+                MIN(_cow_updated_at) as earliest_change
             FROM %I.%I
             WHERE session_id = $1
             GROUP BY operation_id
@@ -734,7 +880,7 @@ BEGIN
         SELECT operation_id, MIN(earliest_change) as earliest_change
         FROM (%s) combined
         GROUP BY operation_id
-        ORDER BY earliest_change
+        ORDER BY MIN(earliest_order)
     $q$, query) USING p_session_id;
 END;
 $$;

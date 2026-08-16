@@ -98,7 +98,7 @@ def _redundant_pks(rows: list[CowWrite]) -> set[tuple]:
 
     cancelled: set[tuple] = set()
     for pk_tuple, entries in grouped.items():
-        entries.sort(key=lambda r: r.updated_at)
+        entries.sort(key=lambda r: r.get_ordering_key())
         has_create = any(not r.is_delete for r in entries)
         ends_deleted = entries[-1].is_delete
         if has_create and ends_deleted:
@@ -157,7 +157,7 @@ def _last_write_per_pk(rows: list[CowWrite]) -> list[CowWrite]:
     latest: dict[tuple, CowWrite] = {}
     for row in rows:
         existing = latest.get(row.get_pk_tuple())
-        if existing is None or row.updated_at >= existing.updated_at:
+        if existing is None or row.get_ordering_key() >= existing.get_ordering_key():
             latest[row.get_pk_tuple()] = row
     return list(latest.values())
 

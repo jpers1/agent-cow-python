@@ -68,7 +68,7 @@ Op IDs on surviving rows are preserved, so the per-op breakdown still makes sens
 
 ## How it works
 
-1. **Extraction** — rows are read from `*_changes` tables, grouped by `operation_id`, sorted by `_cow_updated_at`.
+1. **Extraction** — rows are read from `*_changes` tables, grouped by `operation_id`, sorted by deterministic `_cow_order`.
 2. **Matching** — both sides are reduced to one row per `(table, pk)` (last write wins). Each ground truth entity greedily picks the best agent entity in the same table with matching `is_delete`. UUID mapping handles the fact that ground truth and agent create entities with different UUIDs.
 3. **Field comparison** — each field is compared by SQL type. Text uses `SequenceMatcher.ratio()`, JSON is deep-equal, everything else is exact. PKs, FKs (compared via UUID mapping), timestamps, and configured `ignored_fields` are skipped for content scoring.
 4. **Per-op flow** — for each agent op in topological order, the cumulative agent rows are re-scored against ground truth and the delta is recorded in `op_struct_scores`. `op_content_scores` is computed independently from the final matching: each op gets the mean per-field similarity over matched rows whose agent-side write came from it (ops with no matched rows are omitted, so a weighted mean recovers `content_score`).
