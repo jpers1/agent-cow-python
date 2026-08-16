@@ -14,8 +14,14 @@ The script is idempotent — it reuses an existing container if one already exis
 ## Running tests
 
 ```bash
-uv run pytest agentcow/postgres/tests/
+uv sync --frozen --group dev
+uv run python scripts/check_dependency_policy.py
+uv run pytest agentcow/postgres/tests/ -v
 ```
+
+The tests connect directly to the disposable PostgreSQL service described by
+`PG_HOST`, `PG_PORT`, `PG_USER`, `PG_PASSWORD`, and `PG_DBNAME`. No local
+PostgreSQL process manager or Psycopg fixture is installed.
 
 ## Connecting to the test database
 

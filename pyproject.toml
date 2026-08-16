@@ -1,6 +1,6 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=80,<81"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-cow"
@@ -8,7 +8,8 @@ dynamic = ["version"]
 description = "Database Copy-On-Write for AI agent workspace isolation"
 readme = "README.md"
 requires-python = ">=3.10,<3.15"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     {name = "Trail Team", email = "help@trail-ml.com"},
 ]
@@ -16,7 +17,6 @@ keywords = ["postgresql", "database", "ai", "agents", "copy-on-write", "isolatio
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -36,39 +36,38 @@ sqlalchemy = [
 blob = [
     "boto3>=1.28.0",
 ]
-dev = [
-    "pytest>=8.0.0",
-    "pytest-asyncio>=0.23.0",
-    "pytest-postgresql>=6.0.0",
-    "sqlalchemy>=2.0.0",
-    "asyncpg>=0.29.0",
-    "boto3>=1.28.0",
-    "moto[s3]>=5.0.0",
-]
-
 [project.urls]
-Homepage = "https://github.com/trail-ml/agent-cow-python"
-Repository = "https://github.com/trail-ml/agent-cow-python"
-Issues = "https://github.com/trail-ml/agent-cow-python/issues"
+Homepage = "https://github.com/jpers1/agent-cow-python"
+Repository = "https://github.com/jpers1/agent-cow-python"
+Issues = "https://github.com/jpers1/agent-cow-python/issues"
+Upstream = "https://github.com/trail-ml/agent-cow-python"
 
-[tool.hatch.version]
-path = "agentcow/__init__.py"
+[tool.setuptools.dynamic]
+version = {attr = "agentcow.__version__"}
 
-[tool.hatch.build.targets.wheel]
-packages = ["agentcow"]
+[tool.setuptools.packages.find]
+include = ["agentcow*"]
+namespaces = true
+
+[tool.setuptools.package-data]
+"agentcow.blob" = ["README.md"]
+"agentcow.postgres" = ["README.md"]
+"agentcow.scoring" = ["README.md"]
 
 [dependency-groups]
 dev = [
-    "black>=24.0.0",
-    "pytest>=8.0.0",
-    "pytest-asyncio>=0.23.0",
-    "pytest-postgresql>=8.0.0",
-    "moto[s3]>=5.0.0",
+    "asyncpg>=0.31,<0.32",
+    "build>=1.4,<2",
+    "pytest>=9,<10",
+    "pytest-asyncio>=1.3,<2",
+    "ruff>=0.15,<0.16",
+    "setuptools>=80,<81",
+    "sqlalchemy>=2.0.46,<3",
 ]
 
-[tool.black]
+[tool.ruff]
 line-length = 88
-target-version = ["py310"]
+target-version = "py310"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

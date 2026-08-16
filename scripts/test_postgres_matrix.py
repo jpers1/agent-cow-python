@@ -39,14 +39,7 @@ PYTHON_IMAGES = {
 PRIMARY_PYTHON = "3.12"
 PRIMARY_POSTGRES = "18"
 
-PINNED_TEST_REQUIREMENTS = (
-    "asyncpg==0.31.0",
-    "SQLAlchemy==2.0.46",
-    "pytest==9.0.2",
-    "pytest-asyncio==1.3.0",
-    "pytest-postgresql==8.0.0",
-    "psycopg==3.3.2",
-)
+UV_VERSION = "0.12.5"
 
 
 @dataclass(frozen=True)
@@ -156,37 +149,37 @@ def read_junit(path: Path) -> dict[str, int | float]:
 
 
 def test_command() -> str:
-    requirements = " ".join(shlex.quote(value) for value in PINNED_TEST_REQUIREMENTS)
     return f"""set -eu
 cp -a /source /tmp/agent-cow
 cd /tmp/agent-cow
-apt-get update -qq
-apt-get install -y -qq --no-install-recommends libpq5 > /dev/null
-rm -rf /var/lib/apt/lists/*
-python -m venv /tmp/venv
-. /tmp/venv/bin/activate
-python -m pip install --disable-pip-version-check --quiet --upgrade pip
-python -m pip install --disable-pip-version-check --quiet -e . {requirements}
+python -m pip install --disable-pip-version-check --quiet uv=={UV_VERSION}
+uv sync --frozen --group dev
+export PATH="/tmp/agent-cow/.venv/bin:$PATH"
+python scripts/check_dependency_policy.py
 python - <<'PY' > /result/environment.json
+import asyncio
 import json
 import platform
 
 import asyncpg
-import psycopg
 import sqlalchemy
 
-with psycopg.connect(
-    host="127.0.0.1",
-    port=5432,
-    user="postgres",
-    password="postgres",
-    dbname="postgres",
-) as connection:
-    server_version = connection.execute("SHOW server_version").fetchone()[0]
+async def server_version():
+    connection = await asyncpg.connect(
+        host="127.0.0.1",
+        port=5432,
+        user="postgres",
+        password="postgres",
+        database="postgres",
+    )
+    try:
+        return await connection.fetchval("SHOW server_version")
+    finally:
+        await connection.close()
 
 print(json.dumps({{
     "python_version": platform.python_version(),
-    "server_version": server_version,
+    "server_version": asyncio.run(server_version()),
     "asyncpg_version": asyncpg.__version__,
     "sqlalchemy_version": sqlalchemy.__version__,
 }}))

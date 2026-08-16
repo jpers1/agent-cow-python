@@ -6,9 +6,8 @@ import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
-import psycopg
+import asyncpg
 import pytest
-from psycopg import sql
 
 from agentcow.postgres import (
     apply_cow_variables,
@@ -24,7 +23,14 @@ from agentcow.postgres import (
     validate_cow_schema_privileges,
 )
 
-from conftest import PG_HOST, PG_PASSWORD, PG_PORT, PsycopgExecutor
+from conftest import (
+    PG_PASSWORD,
+    AsyncpgExecutor,
+    AsyncpgTestConnection,
+    connect_test_database,
+    quote_identifier,
+    quote_literal,
+)
 
 
 @dataclass
@@ -35,28 +41,22 @@ class HardenedEnvironment:
     reviewer_role: str
     outsider_role: str
     unsafe_role: str
-    setup: psycopg.Connection
-    runtime: psycopg.Connection
-    reviewer: psycopg.Connection
-    outsider: psycopg.Connection
+    setup: AsyncpgTestConnection
+    runtime: AsyncpgTestConnection
+    reviewer: AsyncpgTestConnection
+    outsider: AsyncpgTestConnection
 
     @property
-    def setup_executor(self) -> PsycopgExecutor:
-        return PsycopgExecutor(self.setup)
+    def setup_executor(self) -> AsyncpgExecutor:
+        return AsyncpgExecutor(self.setup)
 
     @property
-    def reviewer_executor(self) -> PsycopgExecutor:
-        return PsycopgExecutor(self.reviewer)
+    def reviewer_executor(self) -> AsyncpgExecutor:
+        return AsyncpgExecutor(self.reviewer)
 
 
-def _connect(database: str, role: str) -> psycopg.Connection:
-    return psycopg.connect(
-        host=PG_HOST,
-        port=PG_PORT,
-        user=role,
-        password=PG_PASSWORD,
-        dbname=database,
-    )
+def _connect(database: str, role: str) -> AsyncpgTestConnection:
+    return connect_test_database(database, role=role)
 
 
 @asynccontextmanager
@@ -71,33 +71,29 @@ async def _hardened_environment(postgresql):
     unsafe_role = f"cow_unsafe_{token}"
     login_roles = (setup_role, runtime_role, reviewer_role, outsider_role)
     all_roles = login_roles + (unsafe_role,)
-    connections: list[psycopg.Connection] = []
+    connections: list[AsyncpgTestConnection] = []
 
     postgresql.rollback()
-    with postgresql.cursor() as cursor:
-        for role in login_roles:
-            cursor.execute(
-                sql.SQL(
-                    "CREATE ROLE {} LOGIN PASSWORD {} NOSUPERUSER "
-                    "NOCREATEDB NOCREATEROLE NOINHERIT"
-                ).format(sql.Identifier(role), sql.Literal(PG_PASSWORD))
-            )
-        cursor.execute(
-            sql.SQL(
-                "CREATE ROLE {} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE"
-            ).format(sql.Identifier(unsafe_role))
+    for role in login_roles:
+        postgresql.execute(
+            f"CREATE ROLE {quote_identifier(role)} "
+            f"LOGIN PASSWORD {quote_literal(PG_PASSWORD)} NOSUPERUSER "
+            "NOCREATEDB NOCREATEROLE NOINHERIT"
         )
-        cursor.execute(
-            sql.SQL("GRANT CREATE ON DATABASE {} TO {}").format(
-                sql.Identifier(postgresql.info.dbname), sql.Identifier(setup_role)
-            )
-        )
+    postgresql.execute(
+        f"CREATE ROLE {quote_identifier(unsafe_role)} "
+        "NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE"
+    )
+    postgresql.execute(
+        f"GRANT CREATE ON DATABASE {quote_identifier(postgresql.info.dbname)} "
+        f"TO {quote_identifier(setup_role)}"
+    )
     postgresql.commit()
 
     try:
         setup = _connect(postgresql.info.dbname, setup_role)
         connections.append(setup)
-        setup_executor = PsycopgExecutor(setup)
+        setup_executor = AsyncpgExecutor(setup)
         await setup_executor.execute(f'CREATE SCHEMA "{schema}"')
         await setup_executor.execute(
             f'CREATE TABLE "{schema}".items ('
@@ -109,9 +105,8 @@ async def _hardened_environment(postgresql):
         )
         # This grant follows the original table when enable_cow renames it.
         await setup_executor.execute(
-            sql.SQL("GRANT SELECT, INSERT, UPDATE, DELETE ON {}.items TO {}")
-            .format(sql.Identifier(schema), sql.Identifier(runtime_role))
-            .as_string(setup)
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON "
+            f"{quote_identifier(schema)}.items TO {quote_identifier(runtime_role)}"
         )
         await deploy_cow_functions(setup_executor)
         await enable_cow(setup_executor, "items", schema=schema)
@@ -144,18 +139,17 @@ async def _hardened_environment(postgresql):
         for connection in reversed(connections):
             connection.close()
         postgresql.rollback()
-        with postgresql.cursor() as cursor:
-            for role in all_roles:
-                cursor.execute(
-                    sql.SQL("DROP OWNED BY {} CASCADE").format(sql.Identifier(role))
-                )
-            for role in all_roles:
-                cursor.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(role)))
+        for role in all_roles:
+            postgresql.execute(f"DROP OWNED BY {quote_identifier(role)} CASCADE")
+        for role in all_roles:
+            postgresql.execute(f"DROP ROLE {quote_identifier(role)}")
         postgresql.commit()
 
 
-def _assert_insufficient(connection: psycopg.Connection, statement: str) -> None:
-    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+def _assert_insufficient(
+    connection: AsyncpgTestConnection, statement: str
+) -> None:
+    with pytest.raises(asyncpg.InsufficientPrivilegeError):
         connection.execute(statement)
     connection.rollback()
 
@@ -169,7 +163,7 @@ async def test_canonical_write_compatibility_requires_explicit_opt_in(
     await enable_cow(seeded_executor, "users")
     seeded_executor.commit()
 
-    with pytest.raises(psycopg.errors.InvalidParameterValue):
+    with pytest.raises(asyncpg.InvalidParameterValueError):
         await seeded_executor.execute(
             "INSERT INTO users (name, email) VALUES ('Blocked', 'blocked@test')"
         )
@@ -202,7 +196,7 @@ async def test_runtime_crud_is_isolated_and_ordered(postgresql):
         assert setup_identity == (env.setup_role, False)
 
         session_id = uuid.uuid4()
-        runtime_executor = PsycopgExecutor(env.runtime)
+        runtime_executor = AsyncpgExecutor(env.runtime)
         with env.runtime.transaction():
             first_operation = uuid.uuid4()
             await apply_cow_variables(runtime_executor, session_id, first_operation)
@@ -272,35 +266,35 @@ async def test_runtime_writes_fail_closed_without_complete_context(postgresql):
     async with _hardened_environment(postgresql) as env:
         insert = f"INSERT INTO \"{env.schema}\".items VALUES (200, 'blocked')"
 
-        with pytest.raises(psycopg.errors.InvalidParameterValue):
+        with pytest.raises(asyncpg.InvalidParameterValueError):
             with env.runtime.transaction():
                 env.runtime.execute(insert)
 
-        with pytest.raises(psycopg.errors.InvalidParameterValue):
+        with pytest.raises(asyncpg.InvalidParameterValueError):
             with env.runtime.transaction():
                 env.runtime.execute(f"SET LOCAL app.session_id = '{uuid.uuid4()}'")
                 env.runtime.execute(insert)
 
-        with pytest.raises(psycopg.errors.InvalidTextRepresentation):
+        with pytest.raises(asyncpg.InvalidTextRepresentationError):
             with env.runtime.transaction():
                 env.runtime.execute("SET LOCAL app.session_id = 'not-a-uuid'")
                 env.runtime.execute(f"SET LOCAL app.operation_id = '{uuid.uuid4()}'")
                 env.runtime.execute(insert)
 
-        with pytest.raises(psycopg.errors.InvalidTextRepresentation):
+        with pytest.raises(asyncpg.InvalidTextRepresentationError):
             with env.runtime.transaction():
                 env.runtime.execute(f"SET LOCAL app.session_id = '{uuid.uuid4()}'")
                 env.runtime.execute("SET LOCAL app.operation_id = 'not-a-uuid'")
                 env.runtime.execute(insert)
 
-        runtime_executor = PsycopgExecutor(env.runtime)
+        runtime_executor = AsyncpgExecutor(env.runtime)
         with env.runtime.transaction():
             await apply_cow_variables(runtime_executor, uuid.uuid4(), uuid.uuid4())
-        with pytest.raises(psycopg.errors.InvalidParameterValue):
+        with pytest.raises(asyncpg.InvalidParameterValueError):
             with env.runtime.transaction():
                 env.runtime.execute(insert)
 
-        with pytest.raises(psycopg.errors.InvalidParameterValue):
+        with pytest.raises(asyncpg.InvalidParameterValueError):
             with env.runtime.transaction():
                 await apply_cow_variables(runtime_executor, uuid.uuid4(), uuid.uuid4())
                 await reset_cow_variables(runtime_executor)
@@ -393,7 +387,7 @@ async def test_runtime_and_public_cannot_bypass_internal_boundary(postgresql):
 async def test_reviewer_has_only_controlled_inspection_and_promotion(postgresql):
     """Reviewer APIs commit/discard without exposing internal table DML."""
     async with _hardened_environment(postgresql) as env:
-        runtime_executor = PsycopgExecutor(env.runtime)
+        runtime_executor = AsyncpgExecutor(env.runtime)
         session_id = uuid.uuid4()
         with env.runtime.transaction():
             await apply_cow_variables(runtime_executor, session_id, uuid.uuid4())
@@ -433,7 +427,7 @@ async def test_reviewer_has_only_controlled_inspection_and_promotion(postgresql)
             env.reviewer,
             f"SELECT agentcow.teardown_cow('{env.schema}', 'items')",
         )
-        with pytest.raises(psycopg.errors.InvalidParameterValue):
+        with pytest.raises(asyncpg.InvalidParameterValueError):
             with env.reviewer.transaction():
                 env.reviewer.execute(
                     f"SELECT agentcow.commit_cow('{env.schema}', 'items_base', "
@@ -468,17 +462,15 @@ async def test_inherited_unsafe_privilege_fails_effective_validation(postgresql)
     """Membership in a role with base access is reported, not papered over."""
     async with _hardened_environment(postgresql) as env:
         postgresql.rollback()
-        with postgresql.cursor() as cursor:
-            cursor.execute(
-                sql.SQL("GRANT SELECT, UPDATE ON {}.items_base TO {}").format(
-                    sql.Identifier(env.schema), sql.Identifier(env.unsafe_role)
-                )
-            )
-            cursor.execute(
-                sql.SQL("GRANT {} TO {}").format(
-                    sql.Identifier(env.unsafe_role), sql.Identifier(env.runtime_role)
-                )
-            )
+        postgresql.execute(
+            "GRANT SELECT, UPDATE ON "
+            f"{quote_identifier(env.schema)}.items_base "
+            f"TO {quote_identifier(env.unsafe_role)}"
+        )
+        postgresql.execute(
+            f"GRANT {quote_identifier(env.unsafe_role)} "
+            f"TO {quote_identifier(env.runtime_role)}"
+        )
         postgresql.commit()
 
         validation = await validate_cow_schema_privileges(

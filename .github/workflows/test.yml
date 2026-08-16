@@ -12,6 +12,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  dependency-policy:
+    name: Permissive dependency policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: python -m pip install uv==0.12.5
+      - run: uv sync --frozen --group dev
+      - run: .venv/bin/python scripts/check_dependency_policy.py
+      - name: Check migrated test/tooling files
+        run: |
+          .venv/bin/ruff format --check \
+            agentcow/postgres/tests/conftest.py \
+            scripts/check_dependency_policy.py \
+            scripts/test_postgres_matrix.py
+          .venv/bin/ruff check \
+            agentcow/postgres/tests/conftest.py \
+            agentcow/postgres/tests/test_conflict_detection.py \
+            agentcow/postgres/tests/test_role_hardening.py \
+            scripts/check_dependency_policy.py \
+            scripts/test_postgres_matrix.py
+
   postgres:
     name: Python ${{ matrix.python }} / PostgreSQL ${{ matrix.postgres }}
     runs-on: ubuntu-latest
@@ -72,49 +99,47 @@ jobs:
       - name: Select PostgreSQL port
         run: echo "PG_PORT=${{ job.services.postgres.ports['5432'] }}" >> "$GITHUB_ENV"
 
-      - name: Install PostgreSQL client library
+      - name: Install permissive PostgreSQL development environment
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends libpq5
+          python -m pip install uv==0.12.5
+          uv sync --frozen --group dev
 
-      - name: Install PostgreSQL test dependencies
-        run: >-
-          python -m pip install
-          -e .
-          asyncpg==0.31.0
-          SQLAlchemy==2.0.46
-          pytest==9.0.2
-          pytest-asyncio==1.3.0
-          pytest-postgresql==8.0.0
-          psycopg==3.3.2
+      - name: Enforce dependency policy
+        run: .venv/bin/python scripts/check_dependency_policy.py
 
       - name: Record environment
         run: |
-          python --version
-          python - <<'PY'
+          .venv/bin/python --version
+          .venv/bin/python - <<'PY'
+          import asyncio
           import asyncpg
-          import psycopg
           import sqlalchemy
 
-          with psycopg.connect(
-              host="localhost",
-              port=int("${{ job.services.postgres.ports['5432'] }}"),
-              user="postgres",
-              password="postgres",
-              dbname="postgres",
-          ) as connection:
-              print("PostgreSQL", connection.execute("SHOW server_version").fetchone()[0])
+          async def main():
+              connection = await asyncpg.connect(
+                  host="localhost",
+                  port=int("${{ job.services.postgres.ports['5432'] }}"),
+                  user="postgres",
+                  password="postgres",
+                  database="postgres",
+              )
+              try:
+                  print("PostgreSQL", await connection.fetchval("SHOW server_version"))
+              finally:
+                  await connection.close()
+
+          asyncio.run(main())
           print("asyncpg", asyncpg.__version__)
           print("SQLAlchemy", sqlalchemy.__version__)
           PY
 
       - name: Run complete hardened PostgreSQL suite
-        run: python -m pytest agentcow/postgres/tests/ -v
+        run: .venv/bin/python -m pytest agentcow/postgres/tests/ -v
 
       - name: Compile and import package
         run: |
-          python -m compileall -q agentcow
-          python -c "import agentcow; print(agentcow.__version__)"
+          .venv/bin/python -m compileall -q agentcow
+          .venv/bin/python -c "import agentcow; print(agentcow.__version__)"
 
   package:
     name: Package / Python ${{ matrix.python }}
@@ -132,8 +157,10 @@ jobs:
           python-version: ${{ matrix.python }}
           cache: pip
 
-      - run: python -m pip install build
-      - run: python -m build --wheel --sdist
+      - run: python -m pip install uv==0.12.5
+      - run: uv sync --frozen --group dev
+      - run: .venv/bin/python scripts/check_dependency_policy.py
+      - run: .venv/bin/python -m build --no-isolation --wheel --sdist
 
       - name: Install built wheel in a fresh environment
         run: |
