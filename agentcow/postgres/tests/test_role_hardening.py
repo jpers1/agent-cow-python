@@ -146,9 +146,7 @@ async def _hardened_environment(postgresql):
         postgresql.commit()
 
 
-def _assert_insufficient(
-    connection: AsyncpgTestConnection, statement: str
-) -> None:
+def _assert_insufficient(connection: AsyncpgTestConnection, statement: str) -> None:
     with pytest.raises(asyncpg.InsufficientPrivilegeError):
         connection.execute(statement)
     connection.rollback()

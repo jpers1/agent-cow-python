@@ -53,14 +53,23 @@ Without copy-on-write:            With agent-cow-postgresql:
 
 ## Installation
 
-The `0.2.0rc1` release candidate is not published to PyPI. The maintained
-distribution is named `agent-cow-postgresql`; the Python import namespace
-remains `agentcow`. Until the human lead authorizes a release, install from a
-reviewed source checkout:
+This maintained `0.2.0` release is distributed through GitHub and is not
+published to PyPI.
+
+- Repository: `https://github.com/jpers1/agent-cow-postgresql`
+- Distribution: `agent-cow-postgresql`
+- Imports: `agentcow` and `agentcow.postgres`
+
+Install the tagged Git revision with:
 
 ```bash
-python -m pip install .
+python -m pip install \
+  "agent-cow-postgresql @ git+https://github.com/jpers1/agent-cow-postgresql.git@v0.2.0"
 ```
+
+The GitHub Release also provides a wheel and source distribution. An
+unqualified `pip install agent-cow-postgresql` command is not documented until
+a separate PyPI publication is explicitly authorized and completed.
 
 The verified downstream PostgreSQL range is Python 3.10–3.14 and PostgreSQL
 14–18. See the [support matrix](./docs/SUPPORT_MATRIX.md) for exact evidence.

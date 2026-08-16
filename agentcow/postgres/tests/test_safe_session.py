@@ -60,7 +60,7 @@ async def test_asyncpg_normal_commit_explicit_and_exception_rollback(postgresql)
                 )
                 await cow.set_operation()
                 await cow.execute(
-                    f'UPDATE "{env.schema}".items ' "SET value = 'updated' WHERE id = 1"
+                    f"UPDATE \"{env.schema}\".items SET value = 'updated' WHERE id = 1"
                 )
                 await cow.set_operation()
                 await cow.execute(f'DELETE FROM "{env.schema}".items WHERE id = 2')
@@ -91,7 +91,7 @@ async def test_asyncpg_normal_commit_explicit_and_exception_rollback(postgresql)
                     pool, session_id=exception_session
                 ) as cow:
                     await cow.execute(
-                        f'INSERT INTO "{env.schema}".items ' "VALUES (201, 'exception')"
+                        f"INSERT INTO \"{env.schema}\".items VALUES (201, 'exception')"
                     )
                     raise RuntimeError("application failure")
 
@@ -332,7 +332,7 @@ async def test_reset_context_fails_closed_without_canonical_write(postgresql):
                 async with asyncpg_cow_session(pool, session_id=uuid.uuid4()) as cow:
                     await cow.native.execute("RESET app.session_id")
                     await cow.native.execute(
-                        f'INSERT INTO "{env.schema}".items ' "VALUES (600, 'blocked')"
+                        f"INSERT INTO \"{env.schema}\".items VALUES (600, 'blocked')"
                     )
 
             assert env.setup.execute(
@@ -414,7 +414,7 @@ async def test_sqlalchemy_engine_and_sessionmaker_own_safe_transactions(postgres
                     maker, session_id=failed_session
                 ) as cow:
                     await cow.execute(
-                        f'INSERT INTO "{env.schema}".items ' "VALUES (702, 'rollback')"
+                        f"INSERT INTO \"{env.schema}\".items VALUES (702, 'rollback')"
                     )
                     raise RuntimeError("rollback SQLAlchemy")
 

@@ -143,7 +143,7 @@ pair is Python 3.10/PostgreSQL 14; the newest is Python 3.14/PostgreSQL 18.
 
 ## Test dependency note
 
-H09 preserves the H08 ten-pair strategy. H10 increases the release-candidate
+H09 preserves the H08 ten-pair strategy. H10 increases the release-readiness
 tree from 147 to 150 tests with public-API, hardened-lifecycle/conflict, and
 multi-table rollback readiness scenarios while retaining H09's replacement of
 the inherited `pytest-postgresql`/Psycopg fixture layer with asyncpg and direct

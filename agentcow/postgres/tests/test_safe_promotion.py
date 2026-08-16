@@ -107,8 +107,7 @@ async def test_full_multitable_commit_owns_connection_transaction_and_cleans_poo
                 operation_id=parent_operation,
             ) as cow:
                 await cow.execute(
-                    f'INSERT INTO "{env.schema}".review_parents '
-                    "VALUES (10, 'parent')"
+                    f"INSERT INTO \"{env.schema}\".review_parents VALUES (10, 'parent')"
                 )
                 await cow.set_operation(child_operation)
                 await cow.execute(
@@ -139,8 +138,7 @@ async def test_full_multitable_commit_owns_connection_transaction_and_cleans_poo
                 f'SELECT id, value FROM "{env.schema}".review_parents_base'
             ).fetchall() == [(10, "parent")]
             assert env.setup.execute(
-                f"SELECT id, parent_id, value FROM "
-                f'"{env.schema}".review_children_base'
+                f'SELECT id, parent_id, value FROM "{env.schema}".review_children_base'
             ).fetchall() == [(20, 10, "child")]
 
             async with reviewer_pool.acquire() as connection:
@@ -314,17 +312,17 @@ async def _prepare_failure_case(env, mode: str) -> uuid.UUID:
             await cow.set_operation()
             if mode == "check":
                 await cow.execute(
-                    f'INSERT INTO "{env.schema}".z_bad ' "VALUES (20, -1, 'check')"
+                    f"INSERT INTO \"{env.schema}\".z_bad VALUES (20, -1, 'check')"
                 )
             elif mode == "unique":
                 await cow.execute(
-                    f'INSERT INTO "{env.schema}".z_bad ' "VALUES (20, 2, 'existing')"
+                    f"INSERT INTO \"{env.schema}\".z_bad VALUES (20, 2, 'existing')"
                 )
             elif mode == "delete_phase":
                 await cow.execute(f'DELETE FROM "{env.schema}".z_bad WHERE id = 1')
             else:
                 await cow.execute(
-                    f'INSERT INTO "{env.schema}".z_bad ' "VALUES (20, 2, 'cleanup')"
+                    f"INSERT INTO \"{env.schema}\".z_bad VALUES (20, 2, 'cleanup')"
                 )
         return session_id
     finally:
@@ -372,7 +370,7 @@ async def test_fk_failure_rolls_back_prior_table_and_preserves_pending(postgresq
             [
                 f'CREATE TABLE "{env.schema}".a_good '
                 "(id integer PRIMARY KEY, value text NOT NULL)",
-                f'CREATE TABLE "{env.schema}".y_parents ' "(id integer PRIMARY KEY)",
+                f'CREATE TABLE "{env.schema}".y_parents (id integer PRIMARY KEY)',
                 f'CREATE TABLE "{env.schema}".z_children '
                 "(id integer PRIMARY KEY, parent_id integer NOT NULL "
                 f'REFERENCES "{env.schema}".y_parents(id))',
@@ -430,7 +428,7 @@ async def test_conflict_maps_to_structured_error_and_rolls_back_all_tables(postg
                 )
                 await cow.set_operation()
                 await cow.execute(
-                    f'UPDATE "{env.schema}".items ' "SET value = 'pending' WHERE id = 1"
+                    f"UPDATE \"{env.schema}\".items SET value = 'pending' WHERE id = 1"
                 )
             env.setup.execute(
                 f'UPDATE "{env.schema}".items_base '
@@ -494,7 +492,7 @@ async def test_selective_multitable_commit_rebases_survivor(postgresql):
                 await cow.execute(f"INSERT INTO \"{env.schema}\".beta VALUES (1, 'B')")
                 await cow.set_operation(operation_c)
                 await cow.execute(
-                    f'UPDATE "{env.schema}".alpha ' "SET value = 'C' WHERE id = 1"
+                    f"UPDATE \"{env.schema}\".alpha SET value = 'C' WHERE id = 1"
                 )
 
             async with asyncpg_cow_reviewer(reviewer_pool) as reviewer:
@@ -555,7 +553,7 @@ async def test_selective_discard_is_atomic_and_rejects_invalid_dependency(postgr
                 await cow.execute(f"INSERT INTO \"{env.schema}\".beta VALUES (1, 'B')")
                 await cow.set_operation(operation_c)
                 await cow.execute(
-                    f'UPDATE "{env.schema}".alpha ' "SET value = 'C' WHERE id = 1"
+                    f"UPDATE \"{env.schema}\".alpha SET value = 'C' WHERE id = 1"
                 )
 
             with pytest.raises(CowPromotionRequestError):
@@ -795,8 +793,7 @@ async def test_same_session_runtime_write_waits_until_promotion_finishes(postgre
                     runtime_pool, session_id=session_id
                 ) as cow:
                     await cow.execute(
-                        f'INSERT INTO "{env.schema}".later '
-                        "VALUES (1, 'after review')"
+                        f"INSERT INTO \"{env.schema}\".later VALUES (1, 'after review')"
                     )
 
             promotion = asyncio.create_task(promote())
@@ -924,7 +921,7 @@ async def test_explicit_overwrite_policy_remains_available(postgresql):
         session_id = uuid.uuid4()
         await _record_item_update(env, session_id, "session")
         env.setup.execute(
-            f'UPDATE "{env.schema}".items_base ' "SET value = 'canonical' WHERE id = 1"
+            f"UPDATE \"{env.schema}\".items_base SET value = 'canonical' WHERE id = 1"
         )
         env.setup.commit()
         reviewer_pool = await _pool(env, env.reviewer_role, max_size=1)

@@ -169,7 +169,7 @@ jobs:
       - run: uv sync --frozen --group dev
       - run: .venv/bin/python scripts/check_dependency_policy.py
       - run: .venv/bin/python -m build --no-isolation --wheel --sdist
-      - run: test -f dist/agent_cow_postgresql-0.2.0rc1-py3-none-any.whl
+      - run: test -f dist/agent_cow_postgresql-0.2.0-py3-none-any.whl
 
       - name: Install built wheel in a fresh environment
         run: |
@@ -181,8 +181,8 @@ jobs:
 
           import agentcow
 
-          assert agentcow.__version__ == "0.2.0rc1"
-          assert importlib.metadata.version("agent-cow-postgresql") == "0.2.0rc1"
+          assert agentcow.__version__ == "0.2.0"
+          assert importlib.metadata.version("agent-cow-postgresql") == "0.2.0"
           assert importlib.util.find_spec("agentcow.blob") is None
           try:
               importlib.metadata.version("agent-cow")

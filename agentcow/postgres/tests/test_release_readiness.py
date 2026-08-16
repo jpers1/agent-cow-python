@@ -1,4 +1,4 @@
-"""Release-candidate integration coverage for the hardened public path."""
+"""Release integration coverage for the hardened public path."""
 
 from __future__ import annotations
 
@@ -38,9 +38,9 @@ RECOMMENDED_PUBLIC_API = {
 }
 
 
-def test_release_candidate_version_and_recommended_exports() -> None:
+def test_release_version_and_recommended_exports() -> None:
     """Release documentation names only real downstream public APIs."""
-    assert agentcow.__version__ == "0.2.0rc1"
+    assert agentcow.__version__ == "0.2.0"
     assert RECOMMENDED_PUBLIC_API <= set(postgres_api.__all__)
     assert importlib.util.find_spec("agentcow.blob") is None
 

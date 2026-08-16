@@ -35,7 +35,7 @@ README package data, wheel creation, and sdist creation are represented in
 
 | Distribution | Version | Relationship | Purpose/path | License/SPDX | Policy |
 | --- | --- | --- | --- | --- | --- |
-| `agent-cow-postgresql` | 0.2.0rc1 | Project | PostgreSQL CoW library | MIT | ALLOWED |
+| `agent-cow-postgresql` | 0.2.0 | Project | PostgreSQL CoW library | MIT | ALLOWED |
 
 There are zero mandatory third-party Python runtime dependencies.
 

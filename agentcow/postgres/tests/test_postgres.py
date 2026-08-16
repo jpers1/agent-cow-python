@@ -153,7 +153,7 @@ async def test_cow_insert_is_session_scoped(seeded_executor, session_id, operati
     assert ("Daisy",) not in base_rows
 
     changes_rows = await seeded_executor.execute(
-        "SELECT name FROM users_changes WHERE session_id = " f"'{session_id}'::uuid"
+        f"SELECT name FROM users_changes WHERE session_id = '{session_id}'::uuid"
     )
     assert ("Daisy",) in changes_rows
 
@@ -578,12 +578,12 @@ async def test_enable_cow_with_allow_deferred_fks_opt_in(seeded_executor):
     )
     assert len(rows) > 0
     for conname, condeferrable, condeferred in rows:
-        assert (
-            condeferrable is True
-        ), f"FK {conname} on projects_base should be deferrable"
-        assert (
-            condeferred is False
-        ), f"FK {conname} on projects_base should be INITIALLY IMMEDIATE"
+        assert condeferrable is True, (
+            f"FK {conname} on projects_base should be deferrable"
+        )
+        assert condeferred is False, (
+            f"FK {conname} on projects_base should be INITIALLY IMMEDIATE"
+        )
 
 
 @pytest.mark.asyncio
@@ -605,9 +605,9 @@ async def test_disable_cow_reverts_opted_in_fk_constraints(seeded_executor):
     )
     assert len(rows) > 0
     for conname, condeferrable in rows:
-        assert (
-            condeferrable is False
-        ), f"FK constraint {conname} on projects should have been reverted"
+        assert condeferrable is False, (
+            f"FK constraint {conname} on projects should have been reverted"
+        )
 
 
 @pytest.mark.asyncio
@@ -629,9 +629,9 @@ async def test_disable_cow_reverts_fk_constraints_to_not_deferrable(seeded_execu
     )
     assert len(rows) > 0, "projects should have at least one FK constraint"
     for conname, condeferrable in rows:
-        assert (
-            condeferrable is False
-        ), f"FK constraint {conname} on projects should no longer be deferrable"
+        assert condeferrable is False, (
+            f"FK constraint {conname} on projects should no longer be deferrable"
+        )
 
 
 @pytest.mark.asyncio
@@ -651,9 +651,9 @@ async def test_disable_cow_schema_reverts_fk_constraints(seeded_executor):
             f"  AND ns.nspname = 'public' AND cls.relname = '{table}'"
         )
         for conname, condeferrable in rows:
-            assert (
-                condeferrable is False
-            ), f"FK constraint {conname} on {table} should no longer be deferrable"
+            assert condeferrable is False, (
+                f"FK constraint {conname} on {table} should no longer be deferrable"
+            )
 
 
 @pytest.mark.asyncio
@@ -673,9 +673,9 @@ async def test_enable_cow_makes_multi_hop_fk_deferrable(seeded_executor):
             f"  AND ns.nspname = 'public' AND cls.relname = '{table}'"
         )
         for conname, condeferrable in rows:
-            assert (
-                condeferrable is False
-            ), f"FK constraint {conname} on {table} should have been reverted"
+            assert condeferrable is False, (
+                f"FK constraint {conname} on {table} should have been reverted"
+            )
 
 
 @pytest.mark.asyncio
@@ -695,9 +695,9 @@ async def test_enable_cow_schema_opt_in_flips_multi_hop_fks(seeded_executor):
             f"  AND ns.nspname = 'public' AND cls.relname = '{base_table}'"
         )
         for conname, condeferrable in rows:
-            assert (
-                condeferrable is True
-            ), f"FK {conname} on {base_table} should be deferrable"
+            assert condeferrable is True, (
+                f"FK {conname} on {base_table} should be deferrable"
+            )
 
 
 @pytest.mark.asyncio
@@ -770,9 +770,9 @@ async def test_commit_schema_topological_ordering(
             f"AND cls.relname = '{base_table}'"
         )
         for (condeferrable,) in rows:
-            assert (
-                condeferrable is False
-            ), f"Default enable_cow_schema should NOT flip {base_table} FKs"
+            assert condeferrable is False, (
+                f"Default enable_cow_schema should NOT flip {base_table} FKs"
+            )
 
     await apply_cow_variables(seeded_executor, session_id, operation_id)
     await seeded_executor.execute(

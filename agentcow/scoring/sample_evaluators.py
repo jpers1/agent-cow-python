@@ -40,9 +40,7 @@ def f1(result: ScoringResult) -> float:
 
 def default_score_fn(result: ScoringResult) -> float:
     return (
-        result.struct_score * 0.5
-        + result.content_score * 0.3
-        + result.efficiency * 0.2
+        result.struct_score * 0.5 + result.content_score * 0.3 + result.efficiency * 0.2
     )
 
 
