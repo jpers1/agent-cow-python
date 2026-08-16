@@ -10,6 +10,12 @@ pip install agent-cow
 
 Requires Python 3.10+ and PostgreSQL 14+.
 
+For the preferred asyncpg runtime adapter:
+
+```bash
+pip install agent-cow asyncpg
+```
+
 For SQLAlchemy support:
 
 ```bash
@@ -18,9 +24,11 @@ pip install agent-cow[sqlalchemy]
 
 ## Quick Start
 
-### 1. Create an executor
+### 1. Create a setup executor
 
-`agent-cow` works with any async PostgreSQL driver through the `Executor` protocol — just wrap your connection with an `async execute(sql) -> list[tuple]` method:
+Administrative and review APIs work with any async PostgreSQL driver through
+the low-level `Executor` protocol. Wrap a caller-managed connection with an
+`async execute(sql) -> list[tuple]` method:
 
 ```python
 # asyncpg
@@ -73,40 +81,49 @@ boundary described in
 
 ### 3. Run an agent session
 
-Each agent session gets a `session_id`. Each discrete action the agent takes gets an `operation_id`. These need to be set on the database connection before the agent runs queries — typically by passing them as HTTP request headers from your agent orchestrator to your backend, where middleware applies them to the connection.
-
-For example, your agent sends headers like:
-
-```
-X-Cow-Session-Id: 550e8400-e29b-41d4-a716-446655440000
-X-Cow-Operation-Id: 6ba7b810-9dad-11d1-80b4-00c04fd430c8
-```
-
-And your backend middleware calls `apply_cow_variables` on every request (see [Web Framework Integration](#web-framework-integration) below). The agent rotates the `operation_id` for each discrete action so you can review and cherry-pick changes later.
-
-Here's the core mechanism — however you pass the IDs, this is what happens on the database side:
+Use the transaction-owning asyncpg API for the preferred runtime path. The
+application must select `session_id` from trusted server-side state; never use
+an untrusted request value as database identity.
 
 ```python
-import uuid
-from agentcow.postgres import apply_cow_variables
+from agentcow.postgres import asyncpg_cow_session
 
-session_id = uuid.uuid4()
+async with asyncpg_cow_session(
+    application_pool,
+    session_id=server_selected_session_id,
+) as cow:
+    # One acquired connection and one explicit transaction are already active.
+    await cow.execute(
+        "INSERT INTO users (name, email) "
+        "VALUES ('Bessie', 'bessie@sunnymeadow.farm')"
+    )
 
-operation_id = uuid.uuid4()
-await apply_cow_variables(executor, session_id, operation_id)
-
-# Agent runs its queries as normal — INSERT, UPDATE, DELETE all go
-# to the changes table. SELECT merges base data with session changes.
-await executor.execute("INSERT INTO users (name, email) VALUES ('Bessie', 'bessie@sunnymeadow.farm')")
-
-# For the next action, rotate the operation_id
-operation_id = uuid.uuid4()
-await apply_cow_variables(executor, session_id, operation_id)
-
-await executor.execute("UPDATE users SET email = 'bessie@rollinghills.farm' WHERE name = 'Bessie'")
+    # Rotate to another logical action. Omit the UUID to generate one.
+    await cow.set_operation()
+    await cow.execute(
+        "UPDATE users SET email = 'bessie@rollinghills.farm' "
+        "WHERE name = 'Bessie'"
+    )
 ```
 
-Production data is untouched. Other sessions see only the base data.
+Normal exit commits the request transaction (the isolated change rows, not a
+promotion to canonical state). Exceptions, cancellation, or
+`await cow.rollback()` roll it back. The equivalent
+`sqlalchemy_cow_session(...)` API supports SQLAlchemy asyncio engines,
+connections, sessions, and `async_sessionmaker`.
+
+Both APIs reject stale context, apply and validate transaction-local settings,
+and verify the connection is clean before pool release. Production data is
+untouched until a separate authorized review operation promotes changes.
+
+Adapter support is intentionally explicit:
+
+- `asyncpg.Connection` and `asyncpg.Pool` are the preferred first-class path;
+- SQLAlchemy `AsyncEngine`, `AsyncConnection`, `AsyncSession`, and
+  `async_sessionmaker` are supported by the optional SQLAlchemy integration;
+- psycopg and other drivers remain compatible with the low-level `Executor`
+  API, but do not yet have a transaction-owning high-level adapter. They must
+  not be represented as having H04 lifecycle guarantees.
 
 ### 4. Review and commit
 
@@ -147,33 +164,33 @@ See the [interactive demo](https://www.agent-cow.com) for a worked example of a 
 
 ## Web Framework Integration
 
-Here's how to wire `agent-cow` into a FastAPI app so that any request carrying COW headers writes to an isolated session. See [`agentcow/examples/header_parsing_example.py`](../examples/header_parsing_example.py) for a reusable header-parsing utility and middleware pattern.
+Transport authentication and capability lookup belong in the application.
+Resolve an untrusted request to trusted server-owned UUIDs first, then wrap the
+whole database request in one safe scope:
 
 ```python
-import uuid
 from fastapi import FastAPI, Request
-from agentcow.postgres import apply_cow_variables
+from agentcow.postgres import asyncpg_cow_session
 
 app = FastAPI()
 
 @app.middleware("http")
 async def cow_middleware(request: Request, call_next):
-    session_id = request.headers.get("x-cow-session-id")
-    operation_id = request.headers.get("x-cow-operation-id")
-
-    if session_id:
-        executor = get_executor_from_request(request)  # your DB connection helper
-        await apply_cow_variables(
-            executor,
-            session_id=uuid.UUID(session_id),
-            operation_id=uuid.UUID(operation_id) if operation_id else uuid.uuid4(),
-        )
-
-    response = await call_next(request)
-    return response
+    authorized = await resolve_server_owned_cow_context(request)
+    async with asyncpg_cow_session(
+        request.app.state.database_pool,
+        session_id=authorized.session_id,
+        operation_id=authorized.operation_id,
+    ) as cow:
+        request.state.database = cow
+        return await call_next(request)
 ```
 
-You can also build the `SET LOCAL` statements directly for use in raw connection middleware:
+Do not treat client-supplied headers, bearer tokens, or route parameters as
+session UUIDs. The historical header parser is retained only as a clearly
+marked compatibility example; it is not a production authorization boundary.
+
+Low-level integrations may still build `SET LOCAL` statements directly:
 
 ```python
 from agentcow.postgres import build_cow_variable_statements
@@ -183,6 +200,11 @@ stmts = build_cow_variable_statements(session_id, operation_id)
 for stmt in stmts:
     await conn.execute(stmt)
 ```
+
+That path is responsible for acquiring one physical connection, beginning and
+ending one explicit transaction, validating context, handling cancellation,
+and cleaning pooled state. Raw `SET LOCAL` in autocommit mode is unsupported
+for safe COW writes.
 
 ## API Reference
 
@@ -200,7 +222,9 @@ for stmt in stmts:
 
 | Function | Description |
 |----------|-------------|
-| `apply_cow_variables(executor, session_id, operation_id=None, visible_operations=None)` | Set COW session variables for the current transaction |
+| `asyncpg_cow_session(connection_or_pool, *, session_id, operation_id=None, visible_operations=None)` | Recommended asyncpg scope: owns one connection and transaction, validates context, and commits/rolls back/cleans automatically |
+| `sqlalchemy_cow_session(engine_connection_session_or_factory, *, session_id, operation_id=None, visible_operations=None)` | Equivalent optional SQLAlchemy asyncio scope |
+| `apply_cow_variables(executor, session_id, operation_id=None, visible_operations=None)` | Low-level: set COW variables in a transaction managed entirely by the caller |
 | `reset_cow_variables(executor)` | Reset all COW session variables to defaults |
 | `build_cow_variable_statements(session_id, operation_id=None, visible_operations=None)` | Build raw `SET LOCAL` SQL strings (for use without an executor) |
 
@@ -260,6 +284,7 @@ Without the opt-in, **no schema changes** are made by agent-cow.
 
 | Type | Description |
 |------|-------------|
+| `CowSession` | Active high-level scope with `execute`, context validation, operation/visibility switching, explicit rollback, and `native` adapter access |
 | `Executor` | Protocol — any object with `async execute(sql: str) -> list[tuple]` |
 | `CowPostgresConfig` | Dataclass with `agent_session_id`, `operation_id`, `visible_operations` fields |
 | `CowStatus` | TypedDict with `enabled`, `tables_with_cow`, `changes_tables`, `cow_functions_deployed` fields |

@@ -6,10 +6,10 @@ This maintained fork extends the upstream `agent-cow` library with bounded
 PostgreSQL correctness, isolation, and integration improvements. It remains a
 generic copy-on-write engine and is not the SLAIF Agent-State product.
 
-The work described here is provisional. Each change requires its own narrow
-work order, regression evidence, compatibility review, and human-approved
-merge. This document does not claim that any item has already been
-implemented.
+The sequence described here is provisional. Each change requires its own
+narrow work order, regression evidence, compatibility review, and
+human-approved merge. Implementation status is recorded in the item-specific
+sections below.
 
 ## PostgreSQL subsystem
 
@@ -51,7 +51,7 @@ documentation.
 H01 — deterministic operation ordering
 H02 — schema-qualified internal registry/functions
 H03 — privilege and role hardening
-H04 — strict/fail-closed session mode
+H04 — safe session transaction API
 H05 — safe server-owned session integration examples
 H06 — conflict-detection support
 H07 — transaction-safe promotion API
@@ -132,6 +132,28 @@ Session UUID selection remains a trusted-application responsibility: a shared
 runtime role can set custom PostgreSQL GUC values. Database credentials and
 session selection must remain inside the trusted gateway. See
 [`POSTGRES_SECURITY_MODEL.md`](POSTGRES_SECURITY_MODEL.md).
+
+### H04 implementation status and design
+
+H04 adds transaction-owning `asyncpg_cow_session(...)` and
+`sqlalchemy_cow_session(...)` scopes. Each scope validates UUID inputs, obtains
+one physical connection, rejects an already active transaction, begins one
+explicit transaction, rejects stale PostgreSQL COW context, applies and checks
+transaction-local context, and commits or rolls back before checking the
+connection is clean. Pool release happens only after that lifecycle completes.
+
+The yielded `CowSession` implements the low-level `Executor` shape while also
+providing `validate_context()`, `set_operation()`, `set_visible_operations()`,
+and explicit `rollback()`. Statements executed through it are preceded by a
+context check. A generated operation UUID is used when trusted application
+code omits one. `native` remains available for asyncpg- or SQLAlchemy-specific
+work, but is explicitly a trusted escape hatch: the library cannot prevent
+arbitrary SQL in the application process from changing custom GUCs.
+
+The original `Executor`, `apply_cow_variables(...)`, and raw statement helpers
+remain available for compatibility and administrative/reviewer operations.
+They do not own a physical connection or transaction and are not the preferred
+runtime request path.
 
 This ordering may change after review, but work should remain PR-sized. Tests
 for a hardening item should be introduced with its corresponding fix rather

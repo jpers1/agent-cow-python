@@ -73,10 +73,13 @@ from .context import CowPostgresConfig, build_cow_variable_statements
 
 @runtime_checkable
 class Executor(Protocol):
-    """Minimal async SQL executor.
+    """Minimal low-level async SQL executor.
 
     Any object with an ``execute`` method that accepts a SQL string and
     returns rows as ``list[tuple[Any, ...]]`` satisfies this protocol.
+    It does not describe physical-connection or transaction lifetime. Runtime
+    request code should prefer ``asyncpg_cow_session`` or
+    ``sqlalchemy_cow_session`` when those adapters are available.
 
     Example adapters::
 
@@ -1199,7 +1202,12 @@ async def apply_cow_variables(
     operation_id: str | uuid.UUID | None = None,
     visible_operations: list[str | uuid.UUID] | None = None,
 ) -> None:
-    """Set the COW session variables (session_id, operation_id, visible_operations)."""
+    """Set COW variables in the caller's current transaction.
+
+    This low-level helper does not begin a transaction, pin a physical
+    connection, validate applied values, or clean pooled state. Runtime code
+    should prefer the adapter-specific safe session scopes.
+    """
     for stmt in build_cow_variable_statements(
         session_id, operation_id, visible_operations
     ):
@@ -1207,7 +1215,7 @@ async def apply_cow_variables(
 
 
 async def reset_cow_variables(executor: Executor) -> None:
-    """Reset all COW session variables to their defaults."""
+    """Reset COW variables using a caller-managed connection/transaction."""
     await executor.execute("RESET app.session_id")
     await executor.execute("RESET app.operation_id")
     await executor.execute("RESET app.visible_operations")
