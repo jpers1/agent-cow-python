@@ -147,7 +147,7 @@ Evidence gathered on 2026-08-16:
 | Multi-table failure demonstration | PASSED — later constraint failure rolled back prior mutation, preserved pending state, and left the connection reusable |
 | Clean-clone dependency policy and full suite | PASSED — fresh clone and fresh uv cache; policy approved 15 distributions; 150 passed, 0 failed, 0 skipped on Python 3.12.3/PostgreSQL 18.6 |
 | Python 3.10/3.12/3.14 wheel, sdist, install, and archive inspection | PASSED — each isolated wheel reported `0.2.0rc1`; inspected wheel had 48 entries and sdist had 71; no forbidden names or obvious key/credential content |
-| GitHub Actions dependency, ten matrix, and three package jobs | PASSED — 14 of 14 jobs on code-bearing commit `225325cdf9542927a19dfc0b14c67a43d3305c6e` in [run 31945072011](https://github.com/jpers1/agent-cow-python/actions/runs/31945072011) |
+| GitHub Actions dependency, ten matrix, and three package jobs | PASSED — 14 of 14 jobs on code-bearing commit `225325cdf9542927a19dfc0b14c67a43d3305c6e` in [run 31945072011](https://github.com/jpers1/agent-cow-postgresql/actions/runs/31945072011) |
 
 The matrix uses official `postgres:14.24`, `15.19`, `16.15`, `17.11`, and
 `18.6` images and patch-pinned Python 3.10.21, 3.11.16, 3.12.14, 3.13.15, and
