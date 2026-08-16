@@ -28,6 +28,7 @@ jobs:
       - run: .venv/bin/python scripts/check_dependency_policy.py
       - run: .venv/bin/python scripts/check_postgresql_scope.py
       - run: .venv/bin/python scripts/check_release_neutrality.py
+      - run: .venv/bin/python scripts/verify_release_tag.py --self-test
       - name: Check migrated test/tooling files
         run: |
           .venv/bin/ruff format --check \
@@ -36,6 +37,7 @@ jobs:
             scripts/check_dependency_policy.py \
             scripts/check_postgresql_scope.py \
             scripts/check_release_neutrality.py \
+            scripts/verify_release_tag.py \
             scripts/test_postgres_matrix.py
           .venv/bin/ruff check \
             agentcow/postgres/tests/conftest.py \
@@ -45,6 +47,7 @@ jobs:
             scripts/check_dependency_policy.py \
             scripts/check_postgresql_scope.py \
             scripts/check_release_neutrality.py \
+            scripts/verify_release_tag.py \
             scripts/test_postgres_matrix.py
 
   postgres:
