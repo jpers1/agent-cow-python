@@ -137,7 +137,7 @@ async def demonstrate_error_rollback(
             runtime_pool, session_id=trusted_session_id
         ) as cow:
             await cow.execute(
-                "INSERT INTO content.pages (id, title) " "VALUES (1003, 'temporary')"
+                "INSERT INTO content.pages (id, title) VALUES (1003, 'temporary')"
             )
             raise ExampleRequestError("application request failed")
     except ExampleRequestError:

@@ -3,9 +3,10 @@
 This changelog records maintained downstream changes. The fork preserves the
 history and MIT attribution of `trail-ml/agent-cow-python`.
 
-## 0.2.0rc1
+## 0.2.0 — 2026-08-16
 
-Downstream release candidate derived from upstream `0.1.7` at commit
+First maintained PostgreSQL-focused downstream release. Derived from Trail's
+MIT-licensed `agent-cow-python` `0.1.7` at commit
 `d49d74e3f357d67bf5eda5377bbca50cdf3d952e`.
 
 ### Scope
@@ -50,11 +51,12 @@ Downstream release candidate derived from upstream `0.1.7` at commit
 
 ### Compatibility
 
-- Distribution name and upstream low-level Python APIs remain available.
+- The distribution is `agent-cow-postgresql`; the `agentcow` import namespace
+  and upstream low-level Python APIs remain available.
 - Supported Python versions are 3.10–3.14.
 - Supported PostgreSQL versions are 14–18.
-- This downstream RC is not published to PyPI. Build a wheel from reviewed
-  source or install from a pinned fork revision.
+- This downstream release is distributed through GitHub and is not published
+  to PyPI.
 
 ### Migration notes
 

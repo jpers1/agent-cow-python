@@ -351,8 +351,7 @@ async def _assert_hardening_owner(
     owners = dict(owner_rows)
     if owners.get("agentcow") != current_user:
         raise PermissionError(
-            f"{current_user} must own schema 'agentcow' before applying COW "
-            "hardening"
+            f"{current_user} must own schema 'agentcow' before applying COW hardening"
         )
     application_access = await executor.execute(
         "SELECT "
@@ -391,7 +390,7 @@ async def _assert_hardening_owner(
 
 
 def _function_reference(name: str, identity_arguments: str) -> str:
-    qualified_name = f'{_quote_ident("agentcow")}.{_quote_ident(name)}'
+    qualified_name = f"{_quote_ident('agentcow')}.{_quote_ident(name)}"
     return f"{qualified_name}({identity_arguments})"
 
 

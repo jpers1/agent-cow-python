@@ -48,14 +48,14 @@ async def run_authorized_request(
     ) as cow:
         await cow.validate_context()
         await cow.native.execute(
-            text("INSERT INTO content.pages (id, title) " "VALUES (:page_id, :title)"),
+            text("INSERT INTO content.pages (id, title) VALUES (:page_id, :title)"),
             {"page_id": page_id, "title": title},
         )
 
         await cow.set_operation()
         await cow.validate_context()
         await cow.native.execute(
-            text("UPDATE content.pages SET title = :title " "WHERE id = :page_id"),
+            text("UPDATE content.pages SET title = :title WHERE id = :page_id"),
             {"page_id": page_id, "title": f"{title} (revised)"},
         )
 

@@ -2,7 +2,7 @@
 
 ## Decision
 
-The downstream `0.2.0rc1` release candidate has completed the final H10 gate:
+The downstream `0.2.0` release has completed the final H10 gate:
 
 ```text
 READY_WITH_DOCUMENTED_LIMITATIONS
@@ -20,14 +20,14 @@ migration, support, and trust-boundary requirements documented here.
 - Upstream audited commit: `d49d74e3f357d67bf5eda5377bbca50cdf3d952e`
 - Upstream package version at that commit: `0.1.7`
 - Maintained downstream project: `jpers1/agent-cow-postgresql`
-- Downstream release-candidate version: `0.2.0rc1`
+- Downstream release version: `0.2.0`
 - License: MIT, with upstream history, authorship, notices, and `LICENSE`
   preserved
 
 The maintained distribution is `agent-cow-postgresql`; the Python import
-namespace remains `agentcow`. This release candidate is not published to
-PyPI. Downstream consumers must use a reviewed wheel or pinned fork revision
-until the human lead approves a publication mechanism.
+namespace remains `agentcow`. This release is distributed through GitHub and
+is not published to PyPI. Downstream consumers must use a reviewed GitHub
+Release wheel or the pinned `v0.2.0` Git revision.
 
 ## Supported downstream scope
 
@@ -94,7 +94,7 @@ not suitable for agent-facing traffic.
 
 ## Recommended public API inventory
 
-The release-candidate integration test verifies that each name below is
+The release-readiness integration test verifies that each name below is
 exported by `agentcow.postgres`:
 
 | Area | Recommended entry points |
@@ -127,7 +127,7 @@ Deployment scans existing CoW-enabled tables before replacing functions:
   conflict-aware pending rows.
 
 Operators must commit or discard ambiguous pending changes with the prior
-version, then deploy `0.2.0rc1`, reapply `harden_cow_schema(...)`, validate the
+version, then deploy `0.2.0`, reapply `harden_cow_schema(...)`, validate the
 effective role boundary, and only then resume runtime traffic.
 
 ## Release-gate evidence
@@ -146,7 +146,7 @@ Evidence gathered on 2026-08-16:
 | Hardened lifecycle and conflict demonstration | PASSED — accepted changes promoted, discarded changes stayed non-canonical, conflict preserved canonical and pending state |
 | Multi-table failure demonstration | PASSED — later constraint failure rolled back prior mutation, preserved pending state, and left the connection reusable |
 | Clean-clone dependency policy and full suite | PASSED — fresh clone and fresh uv cache; policy approved 15 distributions; 150 passed, 0 failed, 0 skipped on Python 3.12.3/PostgreSQL 18.6 |
-| Python 3.10/3.12/3.14 wheel, sdist, install, and archive inspection | PASSED — each isolated wheel reported `0.2.0rc1`; inspected wheel had 48 entries and sdist had 71; no forbidden names or obvious key/credential content |
+| Python 3.10/3.12/3.14 wheel, sdist, install, and archive inspection | PASSED — each isolated wheel reported `0.2.0`; inspected wheel had 37 entries and sdist had 50; no forbidden names or obvious key/credential content |
 | GitHub Actions dependency, ten matrix, and three package jobs | PASSED — 14 of 14 jobs on code-bearing commit `225325cdf9542927a19dfc0b14c67a43d3305c6e` in [run 31945072011](https://github.com/jpers1/agent-cow-postgresql/actions/runs/31945072011) |
 
 The matrix uses official `postgres:14.24`, `15.19`, `16.15`, `17.11`, and
@@ -169,10 +169,10 @@ Black, Hatchling, pathspec, and certifi. The detailed direct/transitive
 inventory is in [`DEPENDENCY_INVENTORY.md`](DEPENDENCY_INVENTORY.md).
 
 The inherited automatic PyPI workflow and tag-pushing release script are not
-part of this release candidate. The fork retains build/test automation but has
-no automatic PyPI publication path. Downstream publishing, tagging, or GitHub
-Release creation requires a separate human-authorized work order and future
-explicit configuration.
+part of this release. The fork retains build/test automation but has no
+automatic PyPI publication path. The `0.2.0` GitHub release is explicitly
+human-authorized; any PyPI publication requires a separate work order and
+future explicit configuration.
 
 ## Known limitations
 

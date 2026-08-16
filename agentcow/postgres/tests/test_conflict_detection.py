@@ -137,7 +137,7 @@ async def test_update_delete_and_insert_conflicts_preserve_both_states(
         == canonical_rows
     )
     assert await seeded_executor.execute(
-        "SELECT count(*) FROM users_changes " f"WHERE session_id = '{session_id}'::uuid"
+        f"SELECT count(*) FROM users_changes WHERE session_id = '{session_id}'::uuid"
     ) == [(1,)]
 
 
@@ -174,7 +174,7 @@ async def test_two_sessions_same_row_conflict_but_unrelated_rows_do_not(
         "SELECT id, name FROM users_base ORDER BY id"
     ) == [(1, "First"), (2, "Unrelated")]
     assert await seeded_executor.execute(
-        "SELECT count(*) FROM users_changes " f"WHERE session_id = '{second}'::uuid"
+        f"SELECT count(*) FROM users_changes WHERE session_id = '{second}'::uuid"
     ) == [(1,)]
 
 
@@ -463,7 +463,7 @@ async def test_selective_commit_rejects_external_conflict_and_non_prefix(
         "SELECT name FROM users_base WHERE id = 1"
     ) == [("External",)]
     assert await seeded_executor.execute(
-        "SELECT count(*) FROM users_changes " f"WHERE session_id = '{session_id}'::uuid"
+        f"SELECT count(*) FROM users_changes WHERE session_id = '{session_id}'::uuid"
     ) == [(2,)]
 
 
@@ -540,11 +540,11 @@ async def test_composite_primary_key_conflict_is_structured(executor):
     await _record(
         executor,
         session_id,
-        "UPDATE inventory SET quantity = 9 " "WHERE site = 'north' AND sku = 'hay'",
+        "UPDATE inventory SET quantity = 9 WHERE site = 'north' AND sku = 'hay'",
     )
     executor.commit()
     await executor.execute(
-        "UPDATE inventory_base SET quantity = 8 " "WHERE site = 'north' AND sku = 'hay'"
+        "UPDATE inventory_base SET quantity = 8 WHERE site = 'north' AND sku = 'hay'"
     )
     executor.commit()
 
@@ -693,7 +693,7 @@ async def test_h04_safe_session_captures_baseline_automatically(postgresql):
         try:
             async with asyncpg_cow_session(pool, session_id=session_id) as cow:
                 await cow.execute(
-                    f'UPDATE "{env.schema}".items ' "SET value = 'pending' WHERE id = 1"
+                    f"UPDATE \"{env.schema}\".items SET value = 'pending' WHERE id = 1"
                 )
         finally:
             await pool.close()
@@ -799,6 +799,5 @@ async def test_atomic_commit_waits_for_inflight_canonical_writer(postgresql):
         "SELECT value FROM race_items_base WHERE id = 1"
     ).fetchone() == ("canonical",)
     assert postgresql.execute(
-        "SELECT value FROM race_items_changes "
-        f"WHERE session_id = '{session_id}'::uuid"
+        f"SELECT value FROM race_items_changes WHERE session_id = '{session_id}'::uuid"
     ).fetchone() == ("session",)

@@ -300,7 +300,7 @@ async def test_fk_dependency_uses_schema_wide_order(seeded_executor):
     )
     await _set_operation(seeded_executor, session_id, child_operation)
     await seeded_executor.execute(
-        "INSERT INTO projects (id, owner_id, title) " "VALUES (100, 100, 'Child')"
+        "INSERT INTO projects (id, owner_id, title) VALUES (100, 100, 'Child')"
     )
 
     parent_row = (
@@ -416,8 +416,7 @@ async def test_pending_upstream_changes_block_upgrade(executor):
     executor.commit()
 
     assert await executor.execute(
-        "SELECT count(DISTINCT _cow_updated_at) "
-        "FROM legacy_accounts_changes"
+        "SELECT count(DISTINCT _cow_updated_at) FROM legacy_accounts_changes"
     ) == [(1,)]
 
     with pytest.raises(RuntimeError, match="contains pending legacy changes"):
