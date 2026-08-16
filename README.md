@@ -12,8 +12,8 @@ originally developed by Trail.
 
 The upstream project and this fork are distributed under the MIT license. This
 fork preserves upstream history and attribution while adding PostgreSQL
-correctness, isolation, and integration improvements required by downstream
-applications including SLAIF Agent-State.
+correctness, isolation, and integration improvements for AI-agent and
+application-controlled workflows.
 
 Upstream project: https://github.com/trail-ml/agent-cow-python
 
@@ -95,7 +95,7 @@ Alignment is an open problem in AI safety, and [misalignment during agent execut
 |---------|------|--------|
 | **PostgreSQL** | [agentcow/postgres](./agentcow/postgres/) | Hardened downstream path |
 | **pg-lite (TypeScript)** | [agent-cow-typescript](https://github.com/trail-ml/agent-cow-ts) | Available |
-| **Blob/File Storage** | — | Upstream-derived; not a SLAIF integration target |
+| **Blob/File Storage** | — | Upstream-derived; outside the hardened PostgreSQL support scope |
 
 ## Quick Example (PostgreSQL)
 

@@ -7,10 +7,10 @@ This repository is an MIT-licensed downstream fork of
 maintained by `jpers1`. Preserve upstream attribution, copyright notices,
 license terms, authorship, and Git history.
 
-The fork hardens and extends the PostgreSQL copy-on-write engine for use
-beneath SLAIF Agent-State and other applications. It is a generic library, not
-the SLAIF Agent-State product. Do not add SLAIF product services, gateways,
-UIs, or application-specific policy here.
+The fork hardens and extends the PostgreSQL copy-on-write engine for generic
+AI-agent and application workflows. It is a reusable library, not an
+application product. Do not add product services, gateways, UIs, or
+application-specific policy here.
 
 ## Remote boundary
 
@@ -56,8 +56,8 @@ into unrelated changes.
 - Prefer explicit fail-closed behavior at security and correctness boundaries.
 - Use PostgreSQL-native transactional and schema semantics.
 - Minimize new dependencies and ownership burden.
-- Preserve generic usefulness outside SLAIF.
-- Do not turn this library into SLAIF Agent-State.
+- Preserve generic usefulness across downstream applications.
+- Do not turn this library into a product-specific application.
 
 Implementation fixes should state their compatibility impact, required
 deployment assumptions, and behavior under failure. Breaking changes require

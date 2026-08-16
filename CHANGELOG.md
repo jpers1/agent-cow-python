@@ -45,8 +45,8 @@ Downstream release candidate derived from upstream `0.1.7` at commit
 - Distribution name and upstream low-level Python APIs remain available.
 - Supported Python versions are 3.10–3.14.
 - Supported PostgreSQL versions are 14–18.
-- `agentcow.blob` remains upstream-derived but is not part of the supported
-  SLAIF Agent-State integration target.
+- `agentcow.blob` remains upstream-derived and is outside the hardened
+  PostgreSQL support scope of this downstream release candidate.
 - This downstream RC is not published to PyPI. Build a wheel from reviewed
   source or install from a pinned fork revision.
 
