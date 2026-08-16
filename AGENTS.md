@@ -17,14 +17,9 @@ add product services, gateways, UIs, or application-specific policy here.
 The expected remotes are:
 
 ```text
-origin   https://github.com/jpers1/agent-cow-python.git (H11 review only)
+origin   https://github.com/jpers1/agent-cow-postgresql.git
 upstream https://github.com/trail-ml/agent-cow-python.git
 ```
-
-After the human merges and separately authorizes the repository rename, the
-canonical downstream origin becomes
-`https://github.com/jpers1/agent-cow-postgresql.git`. Until then, push the H11
-review branch only to the existing `jpers1/agent-cow-python` origin.
 
 - Push only to `origin` unless the human lead explicitly authorizes otherwise.
 - Never open an upstream issue or pull request without explicit human
