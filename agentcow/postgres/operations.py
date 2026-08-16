@@ -10,6 +10,7 @@ No driver-specific imports are used — only standard Python + raw SQL.
 
 import uuid
 
+from .cow_sql_functions import COW_INTERNAL_SCHEMA
 
 COW_FUNCTION_NAMES = (
     "setup_cow",
@@ -35,6 +36,11 @@ def _quote_ident(s: str) -> str:
 def _quote_literal(s: str) -> str:
     """Quote a PostgreSQL string literal, escaping single quotes."""
     return "'" + s.replace("'", "''") + "'"
+
+
+def _internal_function(name: str) -> str:
+    """Return a search-path-independent internal function reference."""
+    return f"{_quote_ident(COW_INTERNAL_SCHEMA)}.{_quote_ident(name)}"
 
 
 def _validate_uuid(value: str | uuid.UUID) -> uuid.UUID:
@@ -81,7 +87,7 @@ def setup_cow_sql(
 ) -> str:
     """SQL to call the ``setup_cow`` PL/pgSQL function."""
     return (
-        f"SELECT setup_cow("
+        f"SELECT {_internal_function('setup_cow')}("
         f"{_quote_literal(schema)}, "
         f"{_quote_literal(base_table)}, "
         f"{_quote_literal(view_name)}, "
@@ -92,7 +98,7 @@ def setup_cow_sql(
 def teardown_cow_sql(schema: str, view_name: str) -> str:
     """SQL to call the ``teardown_cow`` PL/pgSQL function."""
     return (
-        f"SELECT teardown_cow("
+        f"SELECT {_internal_function('teardown_cow')}("
         f"{_quote_literal(schema)}, "
         f"{_quote_literal(view_name)})"
     )
@@ -188,7 +194,12 @@ def get_table_pk_cols_sql(schema: str, table_name: str) -> str:
 def check_cow_functions_deployed_sql() -> str:
     """SQL to check whether the core COW PL/pgSQL functions are deployed."""
     names = ", ".join(_quote_literal(n) for n in COW_FUNCTION_NAMES)
-    return f"SELECT COUNT(*) FROM pg_proc WHERE proname IN ({names})"
+    return (
+        "SELECT COUNT(*) FROM pg_catalog.pg_proc proc "
+        "JOIN pg_catalog.pg_namespace ns ON ns.oid = proc.pronamespace "
+        f"WHERE ns.nspname = {_quote_literal(COW_INTERNAL_SCHEMA)} "
+        f"AND proc.proname IN ({names})"
+    )
 
 
 def list_user_tables_sql(schema: str) -> str:
@@ -290,7 +301,7 @@ def commit_cow_session_sql(
 ) -> str:
     """SQL to commit all COW changes for a session on one table."""
     return (
-        f"SELECT commit_cow("
+        f"SELECT {_internal_function('commit_cow')}("
         f"{_quote_literal(schema)}, "
         f"{_quote_literal(base_table)}, "
         f"{_to_text_array(pk_cols)}, "
@@ -317,7 +328,7 @@ def commit_cow_upsert_sql(
         else "NULL::uuid[]"
     )
     return (
-        f"SELECT commit_cow_upsert("
+        f"SELECT {_internal_function('commit_cow_upsert')}("
         f"{_quote_literal(schema)}, "
         f"{_quote_literal(base_table)}, "
         f"{_to_text_array(pk_cols)}, "
@@ -340,7 +351,7 @@ def commit_cow_delete_sql(
         else "NULL::uuid[]"
     )
     return (
-        f"SELECT commit_cow_delete("
+        f"SELECT {_internal_function('commit_cow_delete')}("
         f"{_quote_literal(schema)}, "
         f"{_quote_literal(base_table)}, "
         f"{_to_text_array(pk_cols)}, "
@@ -362,7 +373,7 @@ def commit_cow_cleanup_sql(
         else "NULL::uuid[]"
     )
     return (
-        f"SELECT commit_cow_cleanup("
+        f"SELECT {_internal_function('commit_cow_cleanup')}("
         f"{_quote_literal(schema)}, "
         f"{_quote_literal(base_table)}, "
         f"{_to_uuid(session_id)}, "
@@ -377,7 +388,7 @@ def get_cow_fk_edges_sql(schema: str, base_tables: list[str]) -> str:
     """
     return (
         f"SELECT parent_base_table, child_base_table, is_self_ref "
-        f"FROM _cow_fk_edges("
+        f"FROM {_internal_function('_cow_fk_edges')}("
         f"{_quote_literal(schema)}, {_to_text_array(base_tables)})"
     )
 
@@ -461,7 +472,7 @@ def discard_cow_session_sql(
 ) -> str:
     """SQL to discard all COW changes for a session on one table."""
     return (
-        f"SELECT discard_cow("
+        f"SELECT {_internal_function('discard_cow')}("
         f"{_quote_literal(schema)}, "
         f"{_quote_literal(base_table)}, "
         f"{_to_uuid(session_id)})"
@@ -482,7 +493,7 @@ def commit_cow_operations_sql(
 ) -> str:
     """SQL to commit specific operations from a COW session to the base table."""
     return (
-        f"SELECT commit_cow("
+        f"SELECT {_internal_function('commit_cow')}("
         f"{_quote_literal(schema)}, "
         f"{_quote_literal(base_table)}, "
         f"{_to_text_array(pk_cols)}, "
@@ -499,7 +510,7 @@ def discard_cow_operations_sql(
 ) -> str:
     """SQL to discard specific operations from a COW session."""
     return (
-        f"SELECT discard_cow("
+        f"SELECT {_internal_function('discard_cow')}("
         f"{_quote_literal(schema)}, "
         f"{_quote_literal(base_table)}, "
         f"{_to_uuid(session_id)}, "
@@ -518,7 +529,7 @@ def get_session_operations_sql(
 ) -> str:
     """SQL to get all operation IDs in a COW session."""
     return (
-        f"SELECT operation_id FROM get_cow_session_operations("
+        f"SELECT operation_id FROM {_internal_function('get_cow_session_operations')}("
         f"{_quote_literal(schema)}, {_to_uuid(session_id)})"
     )
 
@@ -529,7 +540,7 @@ def get_operation_dependencies_sql(
 ) -> str:
     """SQL to get dependency pairs (depends_on, operation_id) in a session."""
     return (
-        f"SELECT depends_on, operation_id FROM get_cow_dependencies("
+        f"SELECT depends_on, operation_id FROM {_internal_function('get_cow_dependencies')}("
         f"{_quote_literal(schema)}, {_to_uuid(session_id)})"
     )
 
@@ -550,7 +561,8 @@ def get_dirty_tables_sql(
 ) -> str:
     """SQL to get all dirty table names for a session from cow_dirty_tables."""
     return (
-        "SELECT table_name FROM cow_dirty_tables "
+        f"SELECT table_name FROM {_quote_ident(schema)}."
+        f"{_quote_ident('cow_dirty_tables')} "
         f"WHERE schema_name = {_quote_literal(schema)} "
         f"AND session_id = {_to_uuid(session_id)}"
     )

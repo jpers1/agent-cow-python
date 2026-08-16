@@ -6,12 +6,14 @@ All functions are deployed to the database via ``deploy_cow_functions()``.
 
 COW_ORDER_COLUMN = "_cow_order"
 COW_ORDER_SEQUENCE_NAME = "_cow_operation_order_seq"
+COW_INTERNAL_SCHEMA = "agentcow"
 
 COW_CHANGES_TABLE_NAME_SQL = """
-CREATE OR REPLACE FUNCTION _cow_changes_table_name(p_base_table text)
+CREATE OR REPLACE FUNCTION agentcow._cow_changes_table_name(p_base_table text)
 RETURNS text
 LANGUAGE sql
 IMMUTABLE
+SET search_path = pg_catalog
 AS $$
     SELECT CASE
         WHEN p_base_table LIKE '%_base'
@@ -21,17 +23,14 @@ AS $$
 $$;
 """
 
-CREATE_DIRTY_TABLES_SQL = """
-CREATE TABLE IF NOT EXISTS cow_dirty_tables (
-    schema_name text NOT NULL,
-    session_id  uuid NOT NULL,
-    table_name  text NOT NULL,
-    PRIMARY KEY (schema_name, session_id, table_name)
-);
-"""
+CREATE_INTERNAL_SCHEMA_SQL = "CREATE SCHEMA IF NOT EXISTS agentcow"
+
+# Match the accessibility of helpers historically deployed in public. H03
+# will replace this compatibility grant with explicit role grants.
+GRANT_INTERNAL_SCHEMA_USAGE_SQL = "GRANT USAGE ON SCHEMA agentcow TO PUBLIC"
 
 SETUP_COW_SQL = """
-CREATE OR REPLACE FUNCTION setup_cow(
+CREATE OR REPLACE FUNCTION agentcow.setup_cow(
     p_schema     text,
     p_base_table text,
     p_view_name  text,
@@ -39,13 +38,15 @@ CREATE OR REPLACE FUNCTION setup_cow(
 )
 RETURNS void
 LANGUAGE plpgsql
+SET search_path = pg_catalog
 AS $$
 DECLARE
-    changes_table_name   text := _cow_changes_table_name(p_base_table);
+    changes_table_name   text := agentcow._cow_changes_table_name(p_base_table);
 
     qual_base            text := format('%I.%I', p_schema, p_base_table);
     qual_changes         text := format('%I.%I', p_schema, changes_table_name);
     qual_view            text := format('%I.%I', p_schema, p_view_name);
+    qual_dirty_tables    text := format('%I.%I', p_schema, 'cow_dirty_tables');
     order_sequence_name  text := '_cow_operation_order_seq';
     qual_order_sequence  text := format('%I.%I', p_schema, order_sequence_name);
     order_sequence_comment text := 'agent-cow deterministic operation order';
@@ -78,6 +79,7 @@ DECLARE
     existing_sequence_comment text;
     has_order_column     boolean;
     has_pending_changes  boolean;
+    legacy_registry_exists boolean;
     order_table          RECORD;
     max_order            bigint := 0;
     table_max_order      bigint;
@@ -91,6 +93,44 @@ BEGIN
     pk_null_check := format('b.%I IS NULL', p_pk_cols[1]);
     pk_delete_condition := (SELECT string_agg(format('%I = OLD.%I', col, col), ' AND ') FROM unnest(p_pk_cols) col);
     pk_old_values := (SELECT string_agg(format('OLD.%I', col), ', ') FROM unnest(p_pk_cols) col);
+
+    -- Registry state belongs to the application schema, not to the caller's
+    -- search path or to a global public-schema assumption.
+    EXECUTE format(
+        'CREATE TABLE IF NOT EXISTS %s (
+           schema_name text NOT NULL,
+           session_id uuid NOT NULL,
+           table_name text NOT NULL,
+           PRIMARY KEY (schema_name, session_id, table_name)
+         )',
+        qual_dirty_tables
+    );
+
+    -- H01 used one public registry for every application schema. Move any
+    -- non-public entries into their owning schema without touching change
+    -- rows, so an enabled table can be redeployed with pending work intact.
+    IF p_schema <> 'public' THEN
+        SELECT EXISTS (
+            SELECT 1
+            FROM pg_class cls
+            JOIN pg_namespace ns ON ns.oid = cls.relnamespace
+            WHERE ns.nspname = 'public'
+              AND cls.relname = 'cow_dirty_tables'
+              AND cls.relkind IN ('r', 'p')
+        ) INTO legacy_registry_exists;
+
+        IF legacy_registry_exists THEN
+            EXECUTE format(
+                'INSERT INTO %s (schema_name, session_id, table_name)
+                 SELECT schema_name, session_id, table_name
+                 FROM public.cow_dirty_tables
+                 WHERE schema_name = $1
+                 ON CONFLICT DO NOTHING',
+                qual_dirty_tables
+            ) USING p_schema;
+            DELETE FROM public.cow_dirty_tables WHERE schema_name = p_schema;
+        END IF;
+    END IF;
 
     -- One sequence per schema provides a shared causal order across every COW
     -- table in that schema. Sequence gaps after rollback are intentional.
@@ -320,6 +360,7 @@ BEGIN
         CREATE OR REPLACE FUNCTION %I.%I()
         RETURNS trigger
         LANGUAGE plpgsql
+        SET search_path = pg_catalog
         AS $trigger$
         DECLARE
             sess uuid;
@@ -347,7 +388,7 @@ BEGIN
                 VALUES (sess, op_id, %s, false, now())
                 ON CONFLICT (session_id, operation_id, %s) %s;
 
-                INSERT INTO cow_dirty_tables (schema_name, session_id, table_name)
+                INSERT INTO %s (schema_name, session_id, table_name)
                 VALUES (TG_TABLE_SCHEMA, sess, TG_TABLE_NAME)
                 ON CONFLICT DO NOTHING;
             END IF;
@@ -358,7 +399,8 @@ BEGIN
     $f$,
         p_schema, upsert_fn_name,
         qual_base, col_list, new_values_list, pk_cols_quoted, base_on_conflict,
-        qual_changes, col_list, new_values_list, pk_cols_quoted, changes_on_conflict
+        qual_changes, col_list, new_values_list, pk_cols_quoted, changes_on_conflict,
+        qual_dirty_tables
     );
 
     -- 5. Delete trigger function
@@ -366,6 +408,7 @@ BEGIN
         CREATE OR REPLACE FUNCTION %I.%I()
         RETURNS trigger
         LANGUAGE plpgsql
+        SET search_path = pg_catalog
         AS $trigger$
         DECLARE
             sess uuid;
@@ -394,7 +437,7 @@ BEGIN
                         _cow_updated_at = now(),
                         _cow_order = EXCLUDED._cow_order;
 
-                INSERT INTO cow_dirty_tables (schema_name, session_id, table_name)
+                INSERT INTO %s (schema_name, session_id, table_name)
                 VALUES (TG_TABLE_SCHEMA, sess, TG_TABLE_NAME)
                 ON CONFLICT DO NOTHING;
             END IF;
@@ -405,7 +448,8 @@ BEGIN
     $f$,
         p_schema, delete_fn_name,
         qual_base, pk_delete_condition,
-        qual_changes, col_list, old_values_list, pk_cols_quoted
+        qual_changes, col_list, old_values_list, pk_cols_quoted,
+        qual_dirty_tables
     );
 
     -- 6. Attach triggers to the COW view
@@ -425,7 +469,7 @@ $$;
 """
 
 COMMIT_COW_UPSERT_SQL = """
-CREATE OR REPLACE FUNCTION commit_cow_upsert(
+CREATE OR REPLACE FUNCTION agentcow.commit_cow_upsert(
     p_schema          text,
     p_base_table      text,
     p_pk_cols         text[],
@@ -434,10 +478,11 @@ CREATE OR REPLACE FUNCTION commit_cow_upsert(
 )
 RETURNS void
 LANGUAGE plpgsql
+SET search_path = pg_catalog
 AS $$
 DECLARE
     qual_base          text := format('%I.%I', p_schema, p_base_table);
-    qual_changes       text := format('%I.%I', p_schema, _cow_changes_table_name(p_base_table));
+    qual_changes       text := format('%I.%I', p_schema, agentcow._cow_changes_table_name(p_base_table));
     pk_cols_quoted     text;
     update_set_clause  text;
     col_list           text;
@@ -493,7 +538,7 @@ $$;
 """
 
 COMMIT_COW_DELETE_SQL = """
-CREATE OR REPLACE FUNCTION commit_cow_delete(
+CREATE OR REPLACE FUNCTION agentcow.commit_cow_delete(
     p_schema          text,
     p_base_table      text,
     p_pk_cols         text[],
@@ -502,10 +547,11 @@ CREATE OR REPLACE FUNCTION commit_cow_delete(
 )
 RETURNS void
 LANGUAGE plpgsql
+SET search_path = pg_catalog
 AS $$
 DECLARE
     qual_base          text := format('%I.%I', p_schema, p_base_table);
-    qual_changes       text := format('%I.%I', p_schema, _cow_changes_table_name(p_base_table));
+    qual_changes       text := format('%I.%I', p_schema, agentcow._cow_changes_table_name(p_base_table));
     pk_cols_quoted     text;
     pk_join_condition  text;
 BEGIN
@@ -529,7 +575,7 @@ $$;
 """
 
 COMMIT_COW_CLEANUP_SQL = """
-CREATE OR REPLACE FUNCTION commit_cow_cleanup(
+CREATE OR REPLACE FUNCTION agentcow.commit_cow_cleanup(
     p_schema          text,
     p_base_table      text,
     p_session         uuid,
@@ -537,9 +583,11 @@ CREATE OR REPLACE FUNCTION commit_cow_cleanup(
 )
 RETURNS void
 LANGUAGE plpgsql
+SET search_path = pg_catalog
 AS $$
 DECLARE
-    qual_changes   text := format('%I.%I', p_schema, _cow_changes_table_name(p_base_table));
+    qual_changes   text := format('%I.%I', p_schema, agentcow._cow_changes_table_name(p_base_table));
+    qual_dirty_tables text := format('%I.%I', p_schema, 'cow_dirty_tables');
     p_view_name    text := regexp_replace(p_base_table, '_base$', '');
     has_remaining  boolean;
 BEGIN
@@ -555,17 +603,17 @@ BEGIN
     ) INTO has_remaining USING p_session;
 
     IF NOT has_remaining THEN
-        DELETE FROM cow_dirty_tables
-        WHERE schema_name = p_schema
-          AND session_id = p_session
-          AND table_name = p_view_name;
+        EXECUTE format(
+            'DELETE FROM %s WHERE schema_name = $1 AND session_id = $2 AND table_name = $3',
+            qual_dirty_tables
+        ) USING p_schema, p_session, p_view_name;
     END IF;
 END;
 $$;
 """
 
 COMMIT_COW_SQL = """
-CREATE OR REPLACE FUNCTION commit_cow(
+CREATE OR REPLACE FUNCTION agentcow.commit_cow(
     p_schema          text,
     p_base_table      text,
     p_pk_cols         text[],
@@ -574,17 +622,18 @@ CREATE OR REPLACE FUNCTION commit_cow(
 )
 RETURNS void
 LANGUAGE plpgsql
+SET search_path = pg_catalog
 AS $$
 BEGIN
-    PERFORM commit_cow_upsert(p_schema, p_base_table, p_pk_cols, p_session, p_operation_ids);
-    PERFORM commit_cow_delete(p_schema, p_base_table, p_pk_cols, p_session, p_operation_ids);
-    PERFORM commit_cow_cleanup(p_schema, p_base_table, p_session, p_operation_ids);
+    PERFORM agentcow.commit_cow_upsert(p_schema, p_base_table, p_pk_cols, p_session, p_operation_ids);
+    PERFORM agentcow.commit_cow_delete(p_schema, p_base_table, p_pk_cols, p_session, p_operation_ids);
+    PERFORM agentcow.commit_cow_cleanup(p_schema, p_base_table, p_session, p_operation_ids);
 END;
 $$;
 """
 
 DISCARD_COW_SQL = """
-CREATE OR REPLACE FUNCTION discard_cow(
+CREATE OR REPLACE FUNCTION agentcow.discard_cow(
     p_schema          text,
     p_base_table      text,
     p_session         uuid,
@@ -592,9 +641,11 @@ CREATE OR REPLACE FUNCTION discard_cow(
 )
 RETURNS void
 LANGUAGE plpgsql
+SET search_path = pg_catalog
 AS $$
 DECLARE
-    qual_changes  text := format('%I.%I', p_schema, _cow_changes_table_name(p_base_table));
+    qual_changes  text := format('%I.%I', p_schema, agentcow._cow_changes_table_name(p_base_table));
+    qual_dirty_tables text := format('%I.%I', p_schema, 'cow_dirty_tables');
     p_view_name   text := regexp_replace(p_base_table, '_base$', '');
     has_remaining  boolean;
 BEGIN
@@ -611,22 +662,23 @@ BEGIN
     ) INTO has_remaining USING p_session;
 
     IF NOT has_remaining THEN
-        DELETE FROM cow_dirty_tables
-        WHERE schema_name = p_schema
-          AND session_id = p_session
-          AND table_name = p_view_name;
+        EXECUTE format(
+            'DELETE FROM %s WHERE schema_name = $1 AND session_id = $2 AND table_name = $3',
+            qual_dirty_tables
+        ) USING p_schema, p_session, p_view_name;
     END IF;
 END;
 $$;
 """
 
 TEARDOWN_COW_SQL = """
-CREATE OR REPLACE FUNCTION teardown_cow(
+CREATE OR REPLACE FUNCTION agentcow.teardown_cow(
     p_schema    text,
     p_view_name text
 )
 RETURNS void
 LANGUAGE plpgsql
+SET search_path = pg_catalog
 AS $$
 DECLARE
     base_table_name    text := p_view_name || '_base';
@@ -634,6 +686,7 @@ DECLARE
     changes_table_name text := p_view_name || '_changes';
     upsert_fn_name     text := p_view_name || '_cow_upsert';
     delete_fn_name     text := p_view_name || '_cow_delete';
+    qual_dirty_tables  text := format('%I.%I', p_schema, 'cow_dirty_tables');
     order_sequence_is_managed boolean;
     r                  RECORD;
 BEGIN
@@ -663,8 +716,10 @@ BEGIN
     EXECUTE format('DROP FUNCTION IF EXISTS %I.%I()', p_schema, upsert_fn_name);
     EXECUTE format('DROP FUNCTION IF EXISTS %I.%I()', p_schema, delete_fn_name);
 
-    DELETE FROM cow_dirty_tables
-    WHERE schema_name = p_schema AND table_name = p_view_name;
+    EXECUTE format(
+        'DELETE FROM %s WHERE schema_name = $1 AND table_name = $2',
+        qual_dirty_tables
+    ) USING p_schema, p_view_name;
 
     IF NOT EXISTS (
         SELECT 1
@@ -694,28 +749,32 @@ $$;
 """
 
 GET_DIRTY_CHANGES_TABLES_SQL = """
-CREATE OR REPLACE FUNCTION _cow_dirty_changes_tables(
+CREATE OR REPLACE FUNCTION agentcow._cow_dirty_changes_tables(
     p_schema     text,
     p_session_id uuid
 )
 RETURNS TABLE(table_name text)
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
+SET search_path = pg_catalog
 AS $$
-    SELECT d.table_name || '_changes' AS table_name
-    FROM cow_dirty_tables d
-    WHERE d.schema_name = p_schema
-      AND d.session_id = p_session_id;
+BEGIN
+    RETURN QUERY EXECUTE format(
+        'SELECT d.table_name || ''_changes'' FROM %I.cow_dirty_tables d WHERE d.schema_name = $1 AND d.session_id = $2',
+        p_schema
+    ) USING p_schema, p_session_id;
+END;
 $$;
 """
 
 GET_COW_DEPENDENCIES_SQL = """
-CREATE OR REPLACE FUNCTION get_cow_dependencies(
+CREATE OR REPLACE FUNCTION agentcow.get_cow_dependencies(
     p_schema     text,
     p_session_id uuid
 )
 RETURNS TABLE(depends_on uuid, operation_id uuid)
 LANGUAGE plpgsql
+SET search_path = pg_catalog
 AS $$
 DECLARE
     tbl RECORD;
@@ -729,7 +788,7 @@ DECLARE
     referenced_changes_table text;
 BEGIN
     FOR tbl IN
-        SELECT t.table_name FROM _cow_dirty_changes_tables(p_schema, p_session_id) t
+        SELECT t.table_name FROM agentcow._cow_dirty_changes_tables(p_schema, p_session_id) t
     LOOP
         SELECT array_agg(kcu.column_name ORDER BY kcu.ordinal_position) INTO pk_cols
         FROM information_schema.table_constraints tc
@@ -764,7 +823,7 @@ BEGIN
     END LOOP;
 
     FOR tbl IN
-        SELECT t.table_name FROM _cow_dirty_changes_tables(p_schema, p_session_id) t
+        SELECT t.table_name FROM agentcow._cow_dirty_changes_tables(p_schema, p_session_id) t
     LOOP
         base_table_name := regexp_replace(tbl.table_name, '_changes$', '');
 
@@ -843,19 +902,20 @@ $$;
 """
 
 GET_SESSION_OPERATIONS_SQL = """
-CREATE OR REPLACE FUNCTION get_cow_session_operations(
+CREATE OR REPLACE FUNCTION agentcow.get_cow_session_operations(
     p_schema     text,
     p_session_id uuid
 )
 RETURNS TABLE(operation_id uuid, earliest_change timestamptz)
 LANGUAGE plpgsql
+SET search_path = pg_catalog
 AS $$
 DECLARE
     tbl RECORD;
     query text := '';
 BEGIN
     FOR tbl IN
-        SELECT t.table_name FROM _cow_dirty_changes_tables(p_schema, p_session_id) t
+        SELECT t.table_name FROM agentcow._cow_dirty_changes_tables(p_schema, p_session_id) t
     LOOP
         IF query != '' THEN
             query := query || ' UNION ALL ';
@@ -887,13 +947,14 @@ $$;
 """
 
 GET_COW_FK_EDGES_SQL = """
-CREATE OR REPLACE FUNCTION _cow_fk_edges(
+CREATE OR REPLACE FUNCTION agentcow._cow_fk_edges(
     p_schema      text,
     p_base_tables text[]
 )
 RETURNS TABLE(parent_base_table text, child_base_table text, is_self_ref boolean)
 LANGUAGE sql
 STABLE
+SET search_path = pg_catalog
 AS $$
     SELECT DISTINCT
         parent_cls.relname::text AS parent_base_table,

@@ -12,7 +12,8 @@ from typing import Any, AsyncIterator, Protocol, TypedDict, runtime_checkable
 
 from .cow_sql_functions import (
     COW_CHANGES_TABLE_NAME_SQL,
-    CREATE_DIRTY_TABLES_SQL,
+    CREATE_INTERNAL_SCHEMA_SQL,
+    GRANT_INTERNAL_SCHEMA_USAGE_SQL,
     SETUP_COW_SQL,
     COMMIT_COW_UPSERT_SQL,
     COMMIT_COW_DELETE_SQL,
@@ -185,8 +186,9 @@ async def deploy_cow_functions(executor: Executor) -> None:
         enabled_tables.append((schema, view_name, base_table, pk_cols))
 
     for sql in (
+        CREATE_INTERNAL_SCHEMA_SQL,
+        GRANT_INTERNAL_SCHEMA_USAGE_SQL,
         COW_CHANGES_TABLE_NAME_SQL,
-        CREATE_DIRTY_TABLES_SQL,
         SETUP_COW_SQL,
         COMMIT_COW_UPSERT_SQL,
         COMMIT_COW_DELETE_SQL,
