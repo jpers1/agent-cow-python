@@ -60,7 +60,8 @@ Without agent-cow:                With agent-cow:
 pip install agent-cow
 ```
 
-Requires Python 3.10+.
+The verified downstream PostgreSQL range is Python 3.10–3.14 and PostgreSQL
+14–18. See the [support matrix](./docs/SUPPORT_MATRIX.md) for exact evidence.
 
 ## How It Works
 
