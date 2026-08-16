@@ -1,0 +1,148 @@
+name: Publish tagged release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish (for example, v0.2.0)
+        required: true
+        type: string
+
+concurrency:
+  group: publish-pypi-${{ inputs.tag }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  validate-and-build:
+    name: Validate tag and build artifacts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out the requested tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Verify requested tag and merged-main ancestry
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          git fetch --no-tags origin \
+            +refs/heads/main:refs/remotes/origin/main
+          python scripts/verify_release_tag.py "$RELEASE_TAG" \
+            --main-ref origin/main
+
+      - name: Install the locked release environment
+        run: |
+          python -m pip install uv==0.12.5
+          uv sync --frozen --group dev
+
+      - name: Run release gates
+        run: |
+          .venv/bin/python scripts/check_dependency_policy.py
+          .venv/bin/python scripts/check_release_neutrality.py
+          .venv/bin/python scripts/check_postgresql_scope.py
+
+      - name: Build wheel and source distribution once
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          rm -rf dist build release-artifacts
+          .venv/bin/python -m build --no-isolation --wheel --sdist
+
+          version="${RELEASE_TAG#v}"
+          wheel="agent_cow_postgresql-${version}-py3-none-any.whl"
+          sdist="agent_cow_postgresql-${version}.tar.gz"
+          test -f "dist/$wheel"
+          test -f "dist/$sdist"
+          test "$(find dist -maxdepth 1 -type f | wc -l)" -eq 2
+
+          mkdir release-artifacts
+          cp "dist/$wheel" "dist/$sdist" release-artifacts/
+          (
+            cd release-artifacts
+            sha256sum "$wheel" "$sdist" > SHA256SUMS
+            sha256sum -c SHA256SUMS
+          )
+
+      - name: Preserve the single validated artifact set
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-distributions-${{ inputs.tag }}
+          path: release-artifacts/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish with PyPI Trusted Publishing
+    needs: validate-and-build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/agent-cow-postgresql/
+    permissions:
+      id-token: write
+      contents: write
+
+    steps:
+      - name: Download the validated artifact set
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-distributions-${{ inputs.tag }}
+          path: dist
+
+      - name: Verify artifacts and isolate PyPI distributions
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          wheel="agent_cow_postgresql-${version}-py3-none-any.whl"
+          sdist="agent_cow_postgresql-${version}.tar.gz"
+          test -f "dist/$wheel"
+          test -f "dist/$sdist"
+          test -f dist/SHA256SUMS
+          (cd dist && sha256sum -c SHA256SUMS)
+
+          mkdir pypi-dist
+          cp "dist/$wheel" "dist/$sdist" pypi-dist/
+          test "$(find pypi-dist -maxdepth 1 -type f | wc -l)" -eq 2
+
+      - name: Publish wheel and sdist to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: pypi-dist/
+          attestations: true
+
+      - name: Reverify the published artifact bytes
+        run: (cd dist && sha256sum -c SHA256SUMS)
+
+      - name: Upload the same artifacts to the draft GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          state="$(gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json isDraft,isPrerelease \
+            --jq '[.isDraft, .isPrerelease] | @tsv')"
+          test "$state" = $'true\tfalse'
+
+          version="${RELEASE_TAG#v}"
+          wheel="agent_cow_postgresql-${version}-py3-none-any.whl"
+          sdist="agent_cow_postgresql-${version}.tar.gz"
+          gh release upload "$RELEASE_TAG" \
+            "dist/$wheel" \
+            "dist/$sdist" \
+            dist/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY"

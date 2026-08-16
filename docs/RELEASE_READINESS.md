@@ -25,9 +25,10 @@ migration, support, and trust-boundary requirements documented here.
   preserved
 
 The maintained distribution is `agent-cow-postgresql`; the Python import
-namespace remains `agentcow`. This release is distributed through GitHub and
-is not published to PyPI. Downstream consumers must use a reviewed GitHub
-Release wheel or the pinned `v0.2.0` Git revision.
+namespace remains `agentcow`. Authorized PyPI publication uses the manual
+Trusted Publishing workflow and a protected GitHub environment; it does not
+use a stored PyPI token. The pinned `v0.2.0` Git revision remains an
+alternative installation source.
 
 ## Supported downstream scope
 
@@ -169,10 +170,11 @@ Black, Hatchling, pathspec, and certifi. The detailed direct/transitive
 inventory is in [`DEPENDENCY_INVENTORY.md`](DEPENDENCY_INVENTORY.md).
 
 The inherited automatic PyPI workflow and tag-pushing release script are not
-part of this release. The fork retains build/test automation but has no
-automatic PyPI publication path. The `0.2.0` GitHub release is explicitly
-human-authorized; any PyPI publication requires a separate work order and
-future explicit configuration.
+part of this release. PyPI publishing is manual, tag-specific, protected by the
+`pypi` GitHub environment, and authenticated through Trusted Publishing/OIDC.
+The workflow does not rebuild between PyPI and GitHub upload or publish from
+arbitrary branch state. Release dispatch remains an explicit human-authorized
+action.
 
 ## Known limitations
 

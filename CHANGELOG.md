@@ -55,8 +55,8 @@ MIT-licensed `agent-cow-python` `0.1.7` at commit
   and upstream low-level Python APIs remain available.
 - Supported Python versions are 3.10–3.14.
 - Supported PostgreSQL versions are 14–18.
-- This downstream release is distributed through GitHub and is not published
-  to PyPI.
+- Release artifacts are distributed through PyPI and GitHub Releases using a
+  manual, tag-specific Trusted Publishing workflow.
 
 ### Migration notes
 
