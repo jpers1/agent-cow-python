@@ -10,7 +10,6 @@ Session-level data helpers for COW session scoring.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
@@ -25,12 +24,15 @@ logger = logging.getLogger(__name__)
 
 def get_session_operations(rows: list[CowWrite]) -> list[UUID]:
     """Return op IDs in topological order (earliest write per op, then op_id)."""
-    earliest: dict[UUID, datetime] = {}
+    earliest: dict[UUID, CowWrite] = {}
     for row in rows:
         existing = earliest.get(row.operation_id)
-        if existing is None or row.updated_at < existing:
-            earliest[row.operation_id] = row.updated_at
-    return sorted(earliest.keys(), key=lambda op_id: (earliest[op_id], op_id))
+        if existing is None or row.get_ordering_key() < existing.get_ordering_key():
+            earliest[row.operation_id] = row
+    return sorted(
+        earliest.keys(),
+        key=lambda op_id: (earliest[op_id].get_ordering_key(), op_id),
+    )
 
 
 def _base_name(table_name: str) -> str:
@@ -72,7 +74,7 @@ async def get_rows_changed(
             f"SELECT {col_list} "
             f"FROM {_quote_ident(schema)}.{_quote_ident(changes_table)} "
             f"WHERE session_id = {_to_uuid(session_id)} "
-            "ORDER BY _cow_updated_at"
+            "ORDER BY _cow_order"
         )
         raw_rows = await executor.execute(sql)
 

@@ -11,7 +11,13 @@ from uuid import UUID
 
 
 CHANGE_TABLE_RESERVED_FIELDS: frozenset[str] = frozenset(
-    {"session_id", "operation_id", "_cow_deleted", "_cow_updated_at"}
+    {
+        "session_id",
+        "operation_id",
+        "_cow_deleted",
+        "_cow_updated_at",
+        "_cow_order",
+    }
 )
 
 
@@ -23,6 +29,7 @@ class CowWrite:
     data: dict[str, Any]
     is_delete: bool
     updated_at: datetime
+    order: int | None = None
 
     def __hash__(self) -> int:
         return hash(self.get_pk_tuple())
@@ -43,6 +50,7 @@ class CowWrite:
         operation_id = row.get("operation_id")
         is_delete = row.get("_cow_deleted", False)
         updated_at = row.get("_cow_updated_at", datetime.now())
+        order = row.get("_cow_order")
 
         data = {
             key: value
@@ -57,7 +65,14 @@ class CowWrite:
             data=data,
             is_delete=is_delete,
             updated_at=updated_at,
+            order=order,
         )
 
     def get_pk_tuple(self) -> tuple:
         return (self.table_name, tuple(sorted(self.primary_key.items())))
+
+    def get_ordering_key(self) -> tuple[int, int | datetime]:
+        """Return deterministic order, with timestamp fallback for old rows."""
+        if self.order is not None:
+            return (0, self.order)
+        return (1, self.updated_at)

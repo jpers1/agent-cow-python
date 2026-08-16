@@ -59,6 +59,31 @@ H08 — PostgreSQL compatibility/version matrix
 H09 — downstream dependency/test cleanup
 ```
 
+### H01 implementation status and design
+
+H01 uses one schema-qualified PostgreSQL sequence named
+`_cow_operation_order_seq` per COW-enabled schema. Every change row stores its
+assigned value in `_cow_order`; all COW tables in the schema therefore share a
+single monotonic order domain. Trigger conflict-update paths also consume and
+store a new value. Rollback gaps are expected and do not affect correctness.
+
+`_cow_updated_at` remains human-readable timestamp metadata. Overlay, commit,
+dependency, and scoring paths use `_cow_order` whenever they need causal
+ordering.
+
+The sequence is owned by the schema owner and is dropped when the last ordered
+COW changes table in the schema is torn down. Because trigger functions remain
+security-invoker functions, a non-owner role that performs COW writes needs
+`USAGE` on the schema's `_cow_operation_order_seq` in addition to its existing
+table privileges.
+
+Deploying the downstream functions automatically upgrades an enabled
+upstream-format COW table only when its legacy changes table is empty. If
+pending legacy rows exist, deployment fails before replacing functions because
+their historical order cannot be reconstructed safely. Applications must
+commit or discard those rows with the previous version before retrying the
+upgrade.
+
 This ordering may change after review, but work should remain PR-sized. Tests
 for a hardening item should be introduced with its corresponding fix rather
 than publishing private audit artifacts independently.
