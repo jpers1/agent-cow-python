@@ -5,6 +5,7 @@ Provides high-level async functions for managing Copy-On-Write tables.
 All functions accept a generic ``Executor`` — no ORM or driver dependency.
 """
 
+import json
 import uuid
 from contextlib import asynccontextmanager
 from graphlib import CycleError, TopologicalSorter
@@ -14,6 +15,8 @@ from .cow_sql_functions import (
     COW_CHANGES_TABLE_NAME_SQL,
     CREATE_INTERNAL_SCHEMA_SQL,
     DROP_LEGACY_SETUP_FUNCTION_SQL,
+    DROP_LEGACY_COMMIT_FUNCTIONS_SQL,
+    COW_SCHEMA_SIGNATURE_SQL,
     CREATE_HARDENED_ROLES_TABLE_SQL,
     CREATE_TABLE_SECURITY_MODES_SQL,
     REVOKE_PUBLIC_CONTROL_SCHEMA_SQL,
@@ -23,6 +26,9 @@ from .cow_sql_functions import (
     REQUIRE_COW_TABLE_SQL,
     REQUIRE_PRIMARY_KEY_SQL,
     SETUP_COW_SQL,
+    GET_COW_CONFLICTS_SQL,
+    REQUIRE_SELECTIVE_PREFIX_SQL,
+    REBASE_COW_AFTER_COMMIT_SQL,
     COMMIT_COW_UPSERT_SQL,
     COMMIT_COW_DELETE_SQL,
     COMMIT_COW_CLEANUP_SQL,
@@ -63,6 +69,7 @@ from .operations import (
     alter_fk_constraints_not_deferrable_sql,
     get_session_operations_sql,
     get_operation_dependencies_sql,
+    get_cow_conflicts_sql,
     set_visible_operations_sql,
     get_dirty_tables_sql,
     _quote_ident,
@@ -115,15 +122,24 @@ class CowPrivilegeValidation(TypedDict):
     violations: list[str]
 
 
+class CowConflict(TypedDict):
+    table_name: str
+    primary_key: dict[str, Any]
+    conflict_kind: str
+    operation_id: uuid.UUID
+    order: int
+
+
 _REVIEWER_FUNCTIONS = (
     ("get_cow_dirty_tables", "text, uuid"),
     ("get_cow_primary_key_columns", "text, text"),
     ("get_cow_session_operations", "text, uuid"),
     ("get_cow_dependencies", "text, uuid"),
     ("_cow_fk_edges", "text, text[]"),
-    ("commit_cow", "text, text, text[], uuid, uuid[]"),
-    ("commit_cow_upsert", "text, text, text[], uuid, uuid[]"),
-    ("commit_cow_delete", "text, text, text[], uuid, uuid[]"),
+    ("get_cow_conflicts", "text, text, text[], uuid, uuid[], boolean"),
+    ("commit_cow", "text, text, text[], uuid, uuid[], text"),
+    ("commit_cow_upsert", "text, text, text[], uuid, uuid[], text"),
+    ("commit_cow_delete", "text, text, text[], uuid, uuid[], text"),
     ("commit_cow_cleanup", "text, text, uuid, uuid[]"),
     ("discard_cow", "text, text, uuid, uuid[]"),
 )
@@ -192,9 +208,10 @@ def _topologically_sort_tables(
 async def deploy_cow_functions(executor: Executor) -> None:
     """Deploy the required PL/pgSQL helper functions to the database.
 
-    Existing upstream-format COW tables are upgraded only when their changes
-    tables are empty. Pending rows cannot be assigned a truthful historical
-    order, so deployment fails before replacing any function in that case.
+    Existing pre-H06 COW tables are upgraded only when their changes tables
+    are empty. Pending rows cannot be assigned truthful historical order or
+    first-touch canonical baselines, so deployment fails before replacing any
+    function in that case.
     """
     enabled_tables: list[tuple[str, str, str, list[str]]] = []
     for (
@@ -203,16 +220,18 @@ async def deploy_cow_functions(executor: Executor) -> None:
         base_table,
         changes_table,
         has_order,
+        has_conflict_baseline,
     ) in await executor.execute(list_enabled_cow_tables_sql()):
-        if not has_order:
+        if not has_order or not has_conflict_baseline:
             rows = await executor.execute(
                 check_table_has_any_rows_sql(schema, changes_table)
             )
             if rows and rows[0][0]:
                 raise RuntimeError(
-                    "Cannot upgrade deterministic COW ordering for "
+                    "Cannot upgrade COW ordering/conflict metadata for "
                     f"{schema}.{view_name}: {schema}.{changes_table} contains "
-                    "pending legacy changes. Commit or discard them with the "
+                    "pending legacy changes from before H06. Commit or discard "
+                    "them with the "
                     "previous agent-cow version before deploying this version."
                 )
         pk_cols = await _get_pk_cols(executor, schema, base_table)
@@ -229,7 +248,12 @@ async def deploy_cow_functions(executor: Executor) -> None:
         REQUIRE_COW_TABLE_SQL,
         REQUIRE_PRIMARY_KEY_SQL,
         DROP_LEGACY_SETUP_FUNCTION_SQL,
+        DROP_LEGACY_COMMIT_FUNCTIONS_SQL,
+        COW_SCHEMA_SIGNATURE_SQL,
         SETUP_COW_SQL,
+        GET_COW_CONFLICTS_SQL,
+        REQUIRE_SELECTIVE_PREFIX_SQL,
+        REBASE_COW_AFTER_COMMIT_SQL,
         COMMIT_COW_UPSERT_SQL,
         COMMIT_COW_DELETE_SQL,
         COMMIT_COW_CLEANUP_SQL,
@@ -285,6 +309,7 @@ async def _enabled_tables_for_schema(
         base_table,
         _changes_table,
         _has_order,
+        _has_conflict_baseline,
     ) in await executor.execute(list_enabled_cow_tables_sql()):
         if row_schema == schema:
             enabled.append(
@@ -984,13 +1009,20 @@ async def commit_cow_session(
     session_id: str | uuid.UUID,
     pk_cols: list[str] | None = None,
     schema: str = "public",
+    conflict_policy: str = "error",
 ) -> None:
-    """Commit all COW changes for *session_id* on a single table."""
+    """Commit one session with conflict-safe behavior by default."""
     base_table = f"{table_name}_base"
     if pk_cols is None:
         pk_cols = await _get_pk_cols(executor, schema, base_table)
     await executor.execute(
-        commit_cow_session_sql(schema, base_table, pk_cols, session_id)
+        commit_cow_session_sql(
+            schema,
+            base_table,
+            pk_cols,
+            session_id,
+            conflict_policy=conflict_policy,
+        )
     )
 
 
@@ -1046,6 +1078,7 @@ async def commit_cow_session_schema(
     session_id: str | uuid.UUID,
     schema: str = "public",
     defer_fk_constraints: bool = False,
+    conflict_policy: str = "error",
 ) -> list[str]:
     """Commit all dirty tables for a session in a schema.
 
@@ -1072,7 +1105,11 @@ async def commit_cow_session_schema(
         async with deferred_fk_constraints(executor):
             for table_name in tables:
                 await commit_cow_session(
-                    executor, table_name, session_id, schema=schema
+                    executor,
+                    table_name,
+                    session_id,
+                    schema=schema,
+                    conflict_policy=conflict_policy,
                 )
         return tables
 
@@ -1084,14 +1121,26 @@ async def commit_cow_session_schema(
         base_table = f"{table_name}_base"
         pk_cols = await _get_pk_cols(executor, schema, base_table)
         await executor.execute(
-            commit_cow_upsert_sql(schema, base_table, pk_cols, session_id)
+            commit_cow_upsert_sql(
+                schema,
+                base_table,
+                pk_cols,
+                session_id,
+                conflict_policy=conflict_policy,
+            )
         )
 
     for table_name in reversed(ordered):
         base_table = f"{table_name}_base"
         pk_cols = await _get_pk_cols(executor, schema, base_table)
         await executor.execute(
-            commit_cow_delete_sql(schema, base_table, pk_cols, session_id)
+            commit_cow_delete_sql(
+                schema,
+                base_table,
+                pk_cols,
+                session_id,
+                conflict_policy=conflict_policy,
+            )
         )
 
     for table_name in ordered:
@@ -1128,8 +1177,9 @@ async def commit_cow_operations(
     operation_ids: list[str | uuid.UUID],
     pk_cols: list[str] | None = None,
     schema: str = "public",
+    conflict_policy: str = "error",
 ) -> None:
-    """Commit specific operations on a single table."""
+    """Commit a causally valid operation prefix on a single table."""
     if not operation_ids:
         return
     base_table = f"{table_name}_base"
@@ -1137,7 +1187,12 @@ async def commit_cow_operations(
         pk_cols = await _get_pk_cols(executor, schema, base_table)
     await executor.execute(
         commit_cow_operations_sql(
-            schema, base_table, pk_cols, session_id, operation_ids
+            schema,
+            base_table,
+            pk_cols,
+            session_id,
+            operation_ids,
+            conflict_policy=conflict_policy,
         )
     )
 
@@ -1181,6 +1236,49 @@ async def get_operation_dependencies(
     """Get dependency pairs (depends_on, operation_id) in a session."""
     rows = await executor.execute(get_operation_dependencies_sql(schema, session_id))
     return [(row[0], row[1]) for row in rows]
+
+
+async def get_cow_conflicts(
+    executor: Executor,
+    session_id: str | uuid.UUID,
+    schema: str = "public",
+    operation_ids: list[str | uuid.UUID] | None = None,
+) -> list[CowConflict]:
+    """Return advisory first-touch conflicts through reviewer-controlled APIs.
+
+    The commit functions independently repeat this check while holding the
+    canonical and changes tables locked; this inspection result is for review
+    interfaces and is not a promotion authorization token.
+    """
+    conflicts: list[CowConflict] = []
+    for table_name in await get_dirty_tables(executor, session_id, schema):
+        base_table = f"{table_name}_base"
+        pk_cols = await _get_pk_cols(executor, schema, base_table)
+        rows = await executor.execute(
+            get_cow_conflicts_sql(
+                schema,
+                base_table,
+                pk_cols,
+                session_id,
+                operation_ids,
+            )
+        )
+        for name, primary_key, kind, operation_id, order in rows:
+            decoded_key = (
+                primary_key
+                if isinstance(primary_key, dict)
+                else json.loads(primary_key)
+            )
+            conflicts.append(
+                CowConflict(
+                    table_name=name,
+                    primary_key=decoded_key,
+                    conflict_kind=kind,
+                    operation_id=operation_id,
+                    order=order,
+                )
+            )
+    return sorted(conflicts, key=lambda conflict: conflict["order"])
 
 
 async def set_visible_operations(

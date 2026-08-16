@@ -15,6 +15,7 @@ from agentcow.postgres import (
     discard_cow_session_schema,
     enable_cow,
     enable_cow_schema,
+    get_cow_conflicts,
     get_dirty_tables,
     get_operation_dependencies,
     get_session_operations,
@@ -121,9 +122,24 @@ async def test_attacker_schema_functions_cannot_redirect_internal_calls(
         SELECT 'redirected_changes'::text
         $$;
 
-        CREATE FUNCTION hostile.commit_cow(text, text, text[], uuid, uuid[])
+        CREATE FUNCTION hostile.commit_cow(
+            text, text, text[], uuid, uuid[], text
+        )
         RETURNS void LANGUAGE plpgsql AS $$
         BEGIN RAISE EXCEPTION 'hostile commit called'; END
+        $$;
+
+        CREATE FUNCTION hostile.get_cow_conflicts(
+            text, text, text[], uuid, uuid[], boolean
+        )
+        RETURNS TABLE(
+            table_name text,
+            primary_key jsonb,
+            conflict_kind text,
+            operation_id uuid,
+            cow_order bigint
+        ) LANGUAGE plpgsql AS $$
+        BEGIN RAISE EXCEPTION 'hostile conflicts called'; END
         $$;
 
         CREATE FUNCTION hostile.discard_cow(text, text, uuid, uuid[])
@@ -177,6 +193,7 @@ async def test_attacker_schema_functions_cannot_redirect_internal_calls(
         first_operation,
         second_operation,
     ]
+    assert await get_cow_conflicts(seeded_executor, session_id) == []
     await reset_cow_variables(seeded_executor)
     assert await commit_cow_session_schema(seeded_executor, session_id) == ["users"]
     assert await seeded_executor.execute(
@@ -326,13 +343,14 @@ async def test_non_public_schema_is_independent_of_search_path(seeded_executor):
 
 
 @pytest.mark.asyncio
-async def test_h01_non_public_dirty_registry_is_migrated_without_losing_changes(
+async def test_h06_non_public_dirty_registry_is_migrated_without_losing_changes(
     seeded_executor,
 ):
-    """H02 moves H01 registry metadata while preserving pending rows."""
+    """Redeployment moves legacy registry metadata without losing H06 rows."""
     schema = "legacy_content"
     session_id = uuid.uuid4()
     operation_id = uuid.uuid4()
+    await deploy_cow_functions(seeded_executor)
     await seeded_executor.execute(f"""
         CREATE SCHEMA {schema};
         CREATE TABLE {schema}.notes_base (
@@ -348,12 +366,25 @@ async def test_h01_non_public_dirty_registry_is_migrated_without_losing_changes(
             _cow_deleted boolean NOT NULL DEFAULT false,
             _cow_updated_at timestamptz NOT NULL DEFAULT now(),
             _cow_order bigint NOT NULL,
+            _cow_base_exists boolean NOT NULL,
+            _cow_base_row jsonb,
+            _cow_base_schema jsonb NOT NULL,
             PRIMARY KEY (session_id, operation_id, id)
         );
         INSERT INTO {schema}.notes_changes
-            (session_id, operation_id, id, body, _cow_order)
-        VALUES
-            ('{session_id}'::uuid, '{operation_id}'::uuid, 1, 'Pending', 5);
+            (session_id, operation_id, id, body, _cow_order,
+             _cow_base_exists, _cow_base_row, _cow_base_schema)
+        SELECT
+            '{session_id}'::uuid,
+            '{operation_id}'::uuid,
+            1,
+            'Pending',
+            5,
+            true,
+            to_jsonb(base),
+            agentcow._cow_schema_signature('{schema}', 'notes_base')
+        FROM {schema}.notes_base base
+        WHERE id = 1;
         CREATE VIEW {schema}.notes AS
             SELECT id, body FROM {schema}.notes_base;
         CREATE TABLE public.cow_dirty_tables (

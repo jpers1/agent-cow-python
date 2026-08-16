@@ -9,7 +9,6 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-
 CHANGE_TABLE_RESERVED_FIELDS: frozenset[str] = frozenset(
     {
         "session_id",
@@ -17,6 +16,9 @@ CHANGE_TABLE_RESERVED_FIELDS: frozenset[str] = frozenset(
         "_cow_deleted",
         "_cow_updated_at",
         "_cow_order",
+        "_cow_base_exists",
+        "_cow_base_row",
+        "_cow_base_schema",
     }
 )
 
