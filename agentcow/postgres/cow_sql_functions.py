@@ -8,6 +8,34 @@ COW_ORDER_COLUMN = "_cow_order"
 COW_ORDER_SEQUENCE_NAME = "_cow_operation_order_seq"
 COW_INTERNAL_SCHEMA = "agentcow"
 
+CREATE_HARDENED_ROLES_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS agentcow._cow_hardened_roles (
+    schema_name text NOT NULL,
+    role_oid oid NOT NULL,
+    role_name name NOT NULL,
+    role_kind text NOT NULL CHECK (role_kind IN ('owner', 'runtime', 'reviewer')),
+    PRIMARY KEY (schema_name, role_oid, role_kind)
+);
+"""
+
+CREATE_TABLE_SECURITY_MODES_SQL = """
+CREATE TABLE IF NOT EXISTS agentcow._cow_table_security_modes (
+    schema_name text NOT NULL,
+    view_name text NOT NULL,
+    fail_closed_writes boolean NOT NULL,
+    security_definer_triggers boolean NOT NULL,
+    PRIMARY KEY (schema_name, view_name)
+);
+"""
+
+REVOKE_PUBLIC_CONTROL_SCHEMA_SQL = "REVOKE ALL ON SCHEMA agentcow FROM PUBLIC"
+REVOKE_PUBLIC_CONTROL_TABLES_SQL = (
+    "REVOKE ALL ON ALL TABLES IN SCHEMA agentcow FROM PUBLIC"
+)
+REVOKE_PUBLIC_CONTROL_FUNCTIONS_SQL = (
+    "REVOKE ALL ON ALL FUNCTIONS IN SCHEMA agentcow FROM PUBLIC"
+)
+
 COW_CHANGES_TABLE_NAME_SQL = """
 CREATE OR REPLACE FUNCTION agentcow._cow_changes_table_name(p_base_table text)
 RETURNS text
@@ -24,17 +52,151 @@ $$;
 """
 
 CREATE_INTERNAL_SCHEMA_SQL = "CREATE SCHEMA IF NOT EXISTS agentcow"
+DROP_LEGACY_SETUP_FUNCTION_SQL = (
+    "DROP FUNCTION IF EXISTS agentcow.setup_cow(text, text, text, text[])"
+)
 
-# Match the accessibility of helpers historically deployed in public. H03
-# will replace this compatibility grant with explicit role grants.
-GRANT_INTERNAL_SCHEMA_USAGE_SQL = "GRANT USAGE ON SCHEMA agentcow TO PUBLIC"
+REQUIRE_REVIEWER_SQL = """
+CREATE OR REPLACE FUNCTION agentcow._cow_require_reviewer(p_schema text)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $$
+DECLARE
+    schema_is_hardened boolean;
+    caller_is_authorized boolean;
+BEGIN
+    SELECT EXISTS (
+        SELECT 1
+        FROM agentcow._cow_hardened_roles roles
+        WHERE roles.schema_name = p_schema
+    ) INTO schema_is_hardened;
+
+    -- Before hardening, only the function owner (or a role able to SET ROLE
+    -- to it) retains the legacy administrative path. A reviewer granted a
+    -- controlled function for one schema cannot use it against another,
+    -- unhardened schema.
+    IF NOT schema_is_hardened THEN
+        IF pg_has_role(session_user, current_user, 'MEMBER') THEN
+            RETURN;
+        END IF;
+        RAISE EXCEPTION 'schema % is not configured for reviewer access',
+            p_schema
+            USING ERRCODE = '42501';
+    END IF;
+
+    SELECT EXISTS (
+        SELECT 1
+        FROM agentcow._cow_hardened_roles roles
+        JOIN pg_roles live_role
+          ON live_role.oid = roles.role_oid
+         AND live_role.rolname = roles.role_name
+        WHERE roles.schema_name = p_schema
+          AND roles.role_kind IN ('owner', 'reviewer')
+          AND pg_has_role(session_user, live_role.oid, 'MEMBER')
+    ) INTO caller_is_authorized;
+
+    IF NOT caller_is_authorized THEN
+        RAISE EXCEPTION 'reviewer authority is required for hardened COW schema %',
+            p_schema
+            USING ERRCODE = '42501';
+    END IF;
+END;
+$$;
+"""
+
+REQUIRE_COW_TABLE_SQL = """
+CREATE OR REPLACE FUNCTION agentcow._cow_require_cow_table(
+    p_schema text,
+    p_base_table text
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $$
+DECLARE
+    view_name text := regexp_replace(p_base_table, '_base$', '');
+    changes_table text := agentcow._cow_changes_table_name(p_base_table);
+BEGIN
+    IF right(p_base_table, 5) <> '_base'
+       OR NOT EXISTS (
+           SELECT 1
+           FROM pg_class base
+           JOIN pg_namespace base_ns ON base_ns.oid = base.relnamespace
+           WHERE base_ns.nspname = p_schema
+             AND base.relname = p_base_table
+             AND base.relkind IN ('r', 'p')
+       )
+       OR NOT EXISTS (
+           SELECT 1
+           FROM pg_class changes
+           JOIN pg_namespace changes_ns ON changes_ns.oid = changes.relnamespace
+           WHERE changes_ns.nspname = p_schema
+             AND changes.relname = changes_table
+             AND changes.relkind IN ('r', 'p')
+       )
+       OR NOT EXISTS (
+           SELECT 1
+           FROM pg_class view_
+           JOIN pg_namespace view_ns ON view_ns.oid = view_.relnamespace
+           WHERE view_ns.nspname = p_schema
+             AND view_.relname = view_name
+             AND view_.relkind = 'v'
+       ) THEN
+        RAISE EXCEPTION '%.% is not an enabled COW base table',
+            p_schema, p_base_table
+            USING ERRCODE = '42501';
+    END IF;
+END;
+$$;
+"""
+
+REQUIRE_PRIMARY_KEY_SQL = """
+CREATE OR REPLACE FUNCTION agentcow._cow_require_primary_key(
+    p_schema text,
+    p_base_table text,
+    p_pk_cols text[]
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $$
+DECLARE
+    actual_pk text[];
+BEGIN
+    SELECT array_agg(attr.attname::text ORDER BY key_.ordinal)
+    INTO actual_pk
+    FROM pg_constraint constraint_
+    JOIN pg_class table_ ON table_.oid = constraint_.conrelid
+    JOIN pg_namespace namespace_ ON namespace_.oid = table_.relnamespace
+    CROSS JOIN LATERAL unnest(constraint_.conkey) WITH ORDINALITY key_(attnum, ordinal)
+    JOIN pg_attribute attr
+      ON attr.attrelid = table_.oid
+     AND attr.attnum = key_.attnum
+    WHERE constraint_.contype = 'p'
+      AND namespace_.nspname = p_schema
+      AND table_.relname = p_base_table;
+
+    IF actual_pk IS NULL OR actual_pk IS DISTINCT FROM p_pk_cols THEN
+        RAISE EXCEPTION 'primary-key columns do not match %.%',
+            p_schema, p_base_table
+            USING ERRCODE = '22023';
+    END IF;
+END;
+$$;
+"""
 
 SETUP_COW_SQL = """
 CREATE OR REPLACE FUNCTION agentcow.setup_cow(
     p_schema     text,
     p_base_table text,
     p_view_name  text,
-    p_pk_cols    text[]
+    p_pk_cols    text[],
+    p_fail_closed_writes boolean DEFAULT NULL,
+    p_security_definer_triggers boolean DEFAULT NULL
 )
 RETURNS void
 LANGUAGE plpgsql
@@ -84,7 +246,49 @@ DECLARE
     max_order            bigint := 0;
     table_max_order      bigint;
     sequence_last_value  bigint;
+    fail_closed_writes   boolean;
+    security_definer_triggers boolean;
+    trigger_security_clause text;
+    missing_upsert_context_sql text;
+    missing_delete_context_sql text;
 BEGIN
+    SELECT
+        COALESCE(
+            p_fail_closed_writes,
+            modes.fail_closed_writes,
+            true
+        ),
+        COALESCE(
+            p_security_definer_triggers,
+            modes.security_definer_triggers,
+            false
+        )
+    INTO fail_closed_writes, security_definer_triggers
+    FROM (SELECT 1) singleton
+    LEFT JOIN agentcow._cow_table_security_modes modes
+      ON modes.schema_name = p_schema
+     AND modes.view_name = p_view_name;
+
+    INSERT INTO agentcow._cow_table_security_modes (
+        schema_name,
+        view_name,
+        fail_closed_writes,
+        security_definer_triggers
+    ) VALUES (
+        p_schema,
+        p_view_name,
+        fail_closed_writes,
+        security_definer_triggers
+    )
+    ON CONFLICT (schema_name, view_name) DO UPDATE SET
+        fail_closed_writes = EXCLUDED.fail_closed_writes,
+        security_definer_triggers = EXCLUDED.security_definer_triggers;
+
+    trigger_security_clause := CASE
+        WHEN security_definer_triggers THEN 'SECURITY DEFINER'
+        ELSE 'SECURITY INVOKER'
+    END;
+
     pk_cols_quoted := (SELECT string_agg(quote_ident(col), ', ') FROM unnest(p_pk_cols) col);
     pk_join_condition := (SELECT string_agg(format('c2.%I = b.%I', col, col), ' AND ') FROM unnest(p_pk_cols) col);
     pk_distinct_on := (SELECT string_agg(format('c3.%I', col), ', ') FROM unnest(p_pk_cols) col);
@@ -356,10 +560,26 @@ BEGIN
         changes_on_conflict := format('DO UPDATE SET %s, _cow_deleted = false, _cow_updated_at = now(), _cow_order = EXCLUDED._cow_order', excluded_set_list);
     END IF;
 
+    IF fail_closed_writes THEN
+        missing_upsert_context_sql :=
+            'RAISE EXCEPTION ''app.session_id and app.operation_id must be set for COW writes'' USING ERRCODE = ''22023'';';
+        missing_delete_context_sql := missing_upsert_context_sql;
+    ELSE
+        missing_upsert_context_sql := format(
+            'INSERT INTO %s (%s) VALUES (%s) ON CONFLICT (%s) %s;',
+            qual_base, col_list, new_values_list, pk_cols_quoted, base_on_conflict
+        );
+        missing_delete_context_sql := format(
+            'DELETE FROM %s WHERE %s;',
+            qual_base, pk_delete_condition
+        );
+    END IF;
+
     EXECUTE format($f$
         CREATE OR REPLACE FUNCTION %I.%I()
         RETURNS trigger
         LANGUAGE plpgsql
+        %s
         SET search_path = pg_catalog
         AS $trigger$
         DECLARE
@@ -374,13 +594,12 @@ BEGIN
             END IF;
 
             IF sess IS NULL THEN
-                INSERT INTO %s (%s)
-                VALUES (%s)
-                ON CONFLICT (%s) %s;
+                %s
             ELSE
                 op_str := NULLIF(current_setting('app.operation_id', true), '');
                 IF op_str IS NULL THEN
-                    RAISE EXCEPTION 'app.operation_id must be set when app.session_id is set';
+                    RAISE EXCEPTION 'app.operation_id must be set when app.session_id is set'
+                        USING ERRCODE = '22023';
                 END IF;
                 op_id := op_str::uuid;
 
@@ -397,10 +616,15 @@ BEGIN
         END;
         $trigger$;
     $f$,
-        p_schema, upsert_fn_name,
-        qual_base, col_list, new_values_list, pk_cols_quoted, base_on_conflict,
+        p_schema, upsert_fn_name, trigger_security_clause,
+        missing_upsert_context_sql,
         qual_changes, col_list, new_values_list, pk_cols_quoted, changes_on_conflict,
         qual_dirty_tables
+    );
+
+    EXECUTE format(
+        'REVOKE ALL ON FUNCTION %I.%I() FROM PUBLIC',
+        p_schema, upsert_fn_name
     );
 
     -- 5. Delete trigger function
@@ -408,6 +632,7 @@ BEGIN
         CREATE OR REPLACE FUNCTION %I.%I()
         RETURNS trigger
         LANGUAGE plpgsql
+        %s
         SET search_path = pg_catalog
         AS $trigger$
         DECLARE
@@ -422,11 +647,12 @@ BEGIN
             END IF;
 
             IF sess IS NULL THEN
-                DELETE FROM %s WHERE %s;
+                %s
             ELSE
                 op_str := NULLIF(current_setting('app.operation_id', true), '');
                 IF op_str IS NULL THEN
-                    RAISE EXCEPTION 'app.operation_id must be set when app.session_id is set';
+                    RAISE EXCEPTION 'app.operation_id must be set when app.session_id is set'
+                        USING ERRCODE = '22023';
                 END IF;
                 op_id := op_str::uuid;
 
@@ -446,10 +672,15 @@ BEGIN
         END;
         $trigger$;
     $f$,
-        p_schema, delete_fn_name,
-        qual_base, pk_delete_condition,
+        p_schema, delete_fn_name, trigger_security_clause,
+        missing_delete_context_sql,
         qual_changes, col_list, old_values_list, pk_cols_quoted,
         qual_dirty_tables
+    );
+
+    EXECUTE format(
+        'REVOKE ALL ON FUNCTION %I.%I() FROM PUBLIC',
+        p_schema, delete_fn_name
     );
 
     -- 6. Attach triggers to the COW view
@@ -478,6 +709,7 @@ CREATE OR REPLACE FUNCTION agentcow.commit_cow_upsert(
 )
 RETURNS void
 LANGUAGE plpgsql
+SECURITY DEFINER
 SET search_path = pg_catalog
 AS $$
 DECLARE
@@ -487,6 +719,10 @@ DECLARE
     update_set_clause  text;
     col_list           text;
 BEGIN
+    PERFORM agentcow._cow_require_reviewer(p_schema);
+    PERFORM agentcow._cow_require_cow_table(p_schema, p_base_table);
+    PERFORM agentcow._cow_require_primary_key(p_schema, p_base_table, p_pk_cols);
+
     pk_cols_quoted := (SELECT string_agg(quote_ident(col), ', ') FROM unnest(p_pk_cols) col);
 
     SELECT string_agg(quote_ident(column_name), ', ' ORDER BY ordinal_position)
@@ -547,6 +783,7 @@ CREATE OR REPLACE FUNCTION agentcow.commit_cow_delete(
 )
 RETURNS void
 LANGUAGE plpgsql
+SECURITY DEFINER
 SET search_path = pg_catalog
 AS $$
 DECLARE
@@ -555,6 +792,10 @@ DECLARE
     pk_cols_quoted     text;
     pk_join_condition  text;
 BEGIN
+    PERFORM agentcow._cow_require_reviewer(p_schema);
+    PERFORM agentcow._cow_require_cow_table(p_schema, p_base_table);
+    PERFORM agentcow._cow_require_primary_key(p_schema, p_base_table, p_pk_cols);
+
     pk_cols_quoted := (SELECT string_agg(quote_ident(col), ', ') FROM unnest(p_pk_cols) col);
     pk_join_condition := (SELECT string_agg(format('c.%I = b.%I', col, col), ' AND ') FROM unnest(p_pk_cols) col);
 
@@ -583,6 +824,7 @@ CREATE OR REPLACE FUNCTION agentcow.commit_cow_cleanup(
 )
 RETURNS void
 LANGUAGE plpgsql
+SECURITY DEFINER
 SET search_path = pg_catalog
 AS $$
 DECLARE
@@ -591,6 +833,9 @@ DECLARE
     p_view_name    text := regexp_replace(p_base_table, '_base$', '');
     has_remaining  boolean;
 BEGIN
+    PERFORM agentcow._cow_require_reviewer(p_schema);
+    PERFORM agentcow._cow_require_cow_table(p_schema, p_base_table);
+
     EXECUTE format(
         'DELETE FROM %s WHERE session_id = $1 AND ($2::uuid[] IS NULL OR operation_id = ANY($2))',
         qual_changes
@@ -622,9 +867,14 @@ CREATE OR REPLACE FUNCTION agentcow.commit_cow(
 )
 RETURNS void
 LANGUAGE plpgsql
+SECURITY DEFINER
 SET search_path = pg_catalog
 AS $$
 BEGIN
+    PERFORM agentcow._cow_require_reviewer(p_schema);
+    PERFORM agentcow._cow_require_cow_table(p_schema, p_base_table);
+    PERFORM agentcow._cow_require_primary_key(p_schema, p_base_table, p_pk_cols);
+
     PERFORM agentcow.commit_cow_upsert(p_schema, p_base_table, p_pk_cols, p_session, p_operation_ids);
     PERFORM agentcow.commit_cow_delete(p_schema, p_base_table, p_pk_cols, p_session, p_operation_ids);
     PERFORM agentcow.commit_cow_cleanup(p_schema, p_base_table, p_session, p_operation_ids);
@@ -641,6 +891,7 @@ CREATE OR REPLACE FUNCTION agentcow.discard_cow(
 )
 RETURNS void
 LANGUAGE plpgsql
+SECURITY DEFINER
 SET search_path = pg_catalog
 AS $$
 DECLARE
@@ -649,6 +900,9 @@ DECLARE
     p_view_name   text := regexp_replace(p_base_table, '_base$', '');
     has_remaining  boolean;
 BEGIN
+    PERFORM agentcow._cow_require_reviewer(p_schema);
+    PERFORM agentcow._cow_require_cow_table(p_schema, p_base_table);
+
     EXECUTE format(
         'DELETE FROM %s WHERE session_id = $1 AND ($2::uuid[] IS NULL OR operation_id = ANY($2))',
         qual_changes
@@ -721,6 +975,9 @@ BEGIN
         qual_dirty_tables
     ) USING p_schema, p_view_name;
 
+    DELETE FROM agentcow._cow_table_security_modes
+    WHERE schema_name = p_schema AND view_name = p_view_name;
+
     IF NOT EXISTS (
         SELECT 1
         FROM information_schema.columns
@@ -756,6 +1013,7 @@ CREATE OR REPLACE FUNCTION agentcow._cow_dirty_changes_tables(
 RETURNS TABLE(table_name text)
 LANGUAGE plpgsql
 STABLE
+SECURITY DEFINER
 SET search_path = pg_catalog
 AS $$
 BEGIN
@@ -774,6 +1032,7 @@ CREATE OR REPLACE FUNCTION agentcow.get_cow_dependencies(
 )
 RETURNS TABLE(depends_on uuid, operation_id uuid)
 LANGUAGE plpgsql
+SECURITY DEFINER
 SET search_path = pg_catalog
 AS $$
 DECLARE
@@ -787,6 +1046,8 @@ DECLARE
     referenced_table_name text;
     referenced_changes_table text;
 BEGIN
+    PERFORM agentcow._cow_require_reviewer(p_schema);
+
     FOR tbl IN
         SELECT t.table_name FROM agentcow._cow_dirty_changes_tables(p_schema, p_session_id) t
     LOOP
@@ -908,12 +1169,15 @@ CREATE OR REPLACE FUNCTION agentcow.get_cow_session_operations(
 )
 RETURNS TABLE(operation_id uuid, earliest_change timestamptz)
 LANGUAGE plpgsql
+SECURITY DEFINER
 SET search_path = pg_catalog
 AS $$
 DECLARE
     tbl RECORD;
     query text := '';
 BEGIN
+    PERFORM agentcow._cow_require_reviewer(p_schema);
+
     FOR tbl IN
         SELECT t.table_name FROM agentcow._cow_dirty_changes_tables(p_schema, p_session_id) t
     LOOP
@@ -946,16 +1210,73 @@ END;
 $$;
 """
 
+GET_COW_DIRTY_TABLES_SQL = """
+CREATE OR REPLACE FUNCTION agentcow.get_cow_dirty_tables(
+    p_schema text,
+    p_session_id uuid
+)
+RETURNS TABLE(table_name text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $$
+BEGIN
+    PERFORM agentcow._cow_require_reviewer(p_schema);
+
+    RETURN QUERY
+    SELECT regexp_replace(dirty.table_name, '_changes$', '')
+    FROM agentcow._cow_dirty_changes_tables(p_schema, p_session_id) dirty
+    ORDER BY dirty.table_name;
+END;
+$$;
+"""
+
+GET_COW_PRIMARY_KEY_COLUMNS_SQL = """
+CREATE OR REPLACE FUNCTION agentcow.get_cow_primary_key_columns(
+    p_schema text,
+    p_base_table text
+)
+RETURNS TABLE(column_name text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $$
+BEGIN
+    PERFORM agentcow._cow_require_reviewer(p_schema);
+    PERFORM agentcow._cow_require_cow_table(p_schema, p_base_table);
+
+    RETURN QUERY
+    SELECT attr.attname::text
+    FROM pg_constraint constraint_
+    JOIN pg_class table_ ON table_.oid = constraint_.conrelid
+    JOIN pg_namespace namespace_ ON namespace_.oid = table_.relnamespace
+    CROSS JOIN LATERAL unnest(constraint_.conkey) WITH ORDINALITY key_(attnum, ordinal)
+    JOIN pg_attribute attr
+      ON attr.attrelid = table_.oid
+     AND attr.attnum = key_.attnum
+    WHERE constraint_.contype = 'p'
+      AND namespace_.nspname = p_schema
+      AND table_.relname = p_base_table
+    ORDER BY key_.ordinal;
+END;
+$$;
+"""
+
 GET_COW_FK_EDGES_SQL = """
 CREATE OR REPLACE FUNCTION agentcow._cow_fk_edges(
     p_schema      text,
     p_base_tables text[]
 )
 RETURNS TABLE(parent_base_table text, child_base_table text, is_self_ref boolean)
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
+SECURITY DEFINER
 SET search_path = pg_catalog
 AS $$
+BEGIN
+    PERFORM agentcow._cow_require_reviewer(p_schema);
+
+    RETURN QUERY
     SELECT DISTINCT
         parent_cls.relname::text AS parent_base_table,
         child_cls.relname::text  AS child_base_table,
@@ -970,5 +1291,6 @@ AS $$
       AND parent_ns.nspname = p_schema
       AND child_cls.relname = ANY(p_base_tables)
       AND parent_cls.relname = ANY(p_base_tables);
+END;
 $$;
 """

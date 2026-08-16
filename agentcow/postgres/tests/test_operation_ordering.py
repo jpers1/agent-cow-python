@@ -31,7 +31,7 @@ async def _begin_ordering_test(executor, *, schema_wide: bool = False) -> None:
     else:
         await enable_cow(executor, "users")
     await executor.execute(
-        "INSERT INTO users (id, name, email) "
+        "INSERT INTO users_base (id, name, email) "
         "VALUES (50, 'Unreferenced', 'unreferenced@example.test')"
     )
     executor.commit()

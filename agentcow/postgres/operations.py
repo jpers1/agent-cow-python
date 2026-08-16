@@ -84,14 +84,28 @@ def setup_cow_sql(
     base_table: str,
     view_name: str,
     pk_cols: list[str],
+    fail_closed_writes: bool | None = None,
+    security_definer_triggers: bool | None = None,
 ) -> str:
     """SQL to call the ``setup_cow`` PL/pgSQL function."""
+    fail_closed = (
+        "NULL::boolean"
+        if fail_closed_writes is None
+        else ("true" if fail_closed_writes else "false")
+    )
+    security_definer = (
+        "NULL::boolean"
+        if security_definer_triggers is None
+        else ("true" if security_definer_triggers else "false")
+    )
     return (
         f"SELECT {_internal_function('setup_cow')}("
         f"{_quote_literal(schema)}, "
         f"{_quote_literal(base_table)}, "
         f"{_quote_literal(view_name)}, "
-        f"{_to_text_array(pk_cols)})"
+        f"{_to_text_array(pk_cols)}, "
+        f"{fail_closed}, "
+        f"{security_definer})"
     )
 
 
@@ -179,15 +193,19 @@ def check_table_is_base_table_sql(schema: str, table_name: str) -> str:
 def get_table_pk_cols_sql(schema: str, table_name: str) -> str:
     """SQL to get the primary key column names for a table."""
     return (
-        "SELECT kcu.column_name "
-        "FROM information_schema.table_constraints tc "
-        "JOIN information_schema.key_column_usage kcu "
-        "ON tc.constraint_name = kcu.constraint_name "
-        "AND tc.table_schema = kcu.table_schema "
-        "WHERE tc.constraint_type = 'PRIMARY KEY' "
-        f"AND tc.table_schema = {_quote_literal(schema)} "
-        f"AND tc.table_name = {_quote_literal(table_name)} "
-        "ORDER BY kcu.ordinal_position"
+        "SELECT attr.attname::text "
+        "FROM pg_catalog.pg_constraint constraint_ "
+        "JOIN pg_catalog.pg_class table_ ON table_.oid = constraint_.conrelid "
+        "JOIN pg_catalog.pg_namespace namespace_ "
+        "ON namespace_.oid = table_.relnamespace "
+        "CROSS JOIN LATERAL unnest(constraint_.conkey) WITH ORDINALITY "
+        "key_(attnum, ordinal) "
+        "JOIN pg_catalog.pg_attribute attr "
+        "ON attr.attrelid = table_.oid AND attr.attnum = key_.attnum "
+        "WHERE constraint_.contype = 'p' "
+        f"AND namespace_.nspname = {_quote_literal(schema)} "
+        f"AND table_.relname = {_quote_literal(table_name)} "
+        "ORDER BY key_.ordinal"
     )
 
 
@@ -559,10 +577,8 @@ def get_dirty_tables_sql(
     schema: str,
     session_id: str | uuid.UUID,
 ) -> str:
-    """SQL to get all dirty table names for a session from cow_dirty_tables."""
+    """SQL to get dirty tables through the controlled reviewer API."""
     return (
-        f"SELECT table_name FROM {_quote_ident(schema)}."
-        f"{_quote_ident('cow_dirty_tables')} "
-        f"WHERE schema_name = {_quote_literal(schema)} "
-        f"AND session_id = {_to_uuid(session_id)}"
+        f"SELECT table_name FROM {_internal_function('get_cow_dirty_tables')}("
+        f"{_quote_literal(schema)}, {_to_uuid(session_id)})"
     )

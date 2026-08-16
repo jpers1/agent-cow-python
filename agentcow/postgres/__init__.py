@@ -2,9 +2,12 @@
 
 from .core import (
     CowStatus,
+    CowPrivilegeValidation,
     Executor,
     deferred_fk_constraints,
     deploy_cow_functions,
+    harden_cow_schema,
+    validate_cow_schema_privileges,
     enable_cow,
     disable_cow,
     enable_cow_schema,
@@ -35,9 +38,12 @@ from .types import (
 
 __all__ = [
     "CowStatus",
+    "CowPrivilegeValidation",
     "Executor",
     "deferred_fk_constraints",
     "deploy_cow_functions",
+    "harden_cow_schema",
+    "validate_cow_schema_privileges",
     "enable_cow",
     "disable_cow",
     "enable_cow_schema",
