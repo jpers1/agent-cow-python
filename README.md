@@ -5,6 +5,19 @@
 [![PyPI](https://img.shields.io/pypi/v/agent-cow.svg)](https://pypi.org/project/agent-cow/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+## Downstream fork
+
+This repository is a downstream fork of
+[`trail-ml/agent-cow-python`](https://github.com/trail-ml/agent-cow-python),
+originally developed by Trail.
+
+The upstream project and this fork are distributed under the MIT license. This
+fork preserves upstream history and attribution while adding PostgreSQL
+correctness, isolation, and integration improvements required by downstream
+applications including SLAIF Agent-State.
+
+Upstream project: https://github.com/trail-ml/agent-cow-python
+
 `agent-cow` intercepts your AI agent's database writes and isolates them in a copy-on-write layer. The agent thinks it's modifying real data, but nothing touches production until you approve. Zero changes to your existing queries.
 
 > Read the full article: [Copy-on-Write in Agentic Systems](https://www.trail-ml.com/blog/agent-cow)
