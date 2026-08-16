@@ -155,6 +155,22 @@ remain available for compatibility and administrative/reviewer operations.
 They do not own a physical connection or transaction and are not the preferred
 runtime request path.
 
+### H05 implementation status and design
+
+H05 makes the hardened asyncpg path the primary public integration pattern.
+The recommended example separates setup, runtime, and reviewer credentials;
+resolves opaque external authorization through application-owned state to a
+server-selected UUID; runs CRUD through `asyncpg_cow_session(...)`; and keeps
+promotion behind controlled reviewer APIs and an explicit reviewer
+transaction.
+
+The former HTTP-header parser example was removed because parsing a
+client-supplied session UUID was not a useful authorization boundary. The
+SQLAlchemy example now imports its optional dependency lazily and uses only
+`sqlalchemy_cow_session(...)` for runtime context. Low-level context helpers
+remain documented as advanced caller-managed APIs, while unsafe canonical
+write compatibility is explicitly limited to trusted canonical workflows.
+
 This ordering may change after review, but work should remain PR-sized. Tests
 for a hardening item should be introduced with its corresponding fix rather
 than publishing private audit artifacts independently.

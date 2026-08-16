@@ -32,6 +32,7 @@ from agentcow.postgres import (
     deploy_cow_functions,
     enable_cow_schema,
     harden_cow_schema,
+    validate_cow_schema_privileges,
 )
 
 await deploy_cow_functions(setup_executor)
@@ -42,6 +43,14 @@ await harden_cow_schema(
     runtime_roles=["application_runtime"],
     reviewer_roles=["application_reviewer"],
 )
+validation = await validate_cow_schema_privileges(
+    setup_executor,
+    schema="content",
+    runtime_roles=["application_runtime"],
+    reviewer_roles=["application_reviewer"],
+)
+if not validation["safe"]:
+    raise RuntimeError(validation["violations"])
 ```
 
 The caller controls the transaction boundary because the driver-neutral
@@ -75,16 +84,11 @@ ownership, `SECURITY DEFINER`, locked `search_path`, and `PUBLIC` privileges.
 
 ## Request contract
 
-Writes to a COW view fail unless both values are valid UUIDs in the current
-transaction:
-
-```sql
-SET LOCAL app.session_id = '...';
-SET LOCAL app.operation_id = '...';
-```
-
-The preferred downstream API owns this contract for asyncpg connections/pools
-and SQLAlchemy async engines/connections/sessions/factories:
+At the PostgreSQL layer, writes to a COW view fail unless valid session and
+operation UUID settings exist in the current transaction. Applications should
+not issue those context statements manually. The preferred downstream API owns
+the contract for asyncpg connections/pools and SQLAlchemy async
+engines/connections/sessions/factories:
 
 ```python
 from agentcow.postgres import asyncpg_cow_session
@@ -114,7 +118,7 @@ Each high-level scope enforces:
 acquire connection
   -> begin transaction
   -> reject stale session, operation, or visibility context
-  -> SET LOCAL server-owned session and operation IDs
+  -> apply server-owned transaction-local session and operation IDs
   -> validate the applied values from PostgreSQL
   -> application CRUD through COW views
   -> validate context before library-controlled statements and scope exit
@@ -139,11 +143,15 @@ Missing, reset, expired, or malformed write context raises an error. A normal
 `SELECT` without context continues to show canonical state. The historical
 canonical-write-through-view behavior is available only through the explicit
 `allow_unsafe_canonical_writes=True` enable option and is incompatible with the
-hardened role model.
+hardened role model. That option exists for trusted canonical application
+workflows that intentionally preserve upstream write-through semantics. It is
+not appropriate for agent-facing runtime traffic.
 
 ## Trusted-gateway boundary
 
-Custom PostgreSQL settings are application-controlled state, not credentials.
+Agent-cow does not authenticate external users or capabilities. The
+application must select the session UUID after authorization. Custom
+PostgreSQL settings are application-controlled state, not credentials.
 The hardened role prevents direct access to internal state, but it does not
 cryptographically bind a shared runtime database role to one session UUID.
 
@@ -159,3 +167,20 @@ arbitrary SQL trustworthy: code with direct access can issue `RESET`, change a
 custom GUC, or bypass wrapper validation. H03 still makes missing/reset write
 context fail closed, but the application process and its database credentials
 remain inside the trusted boundary.
+
+## Patterns not recommended for hardened deployments
+
+- Accepting an external request's session UUID as database identity without a
+  server-side authorization lookup.
+- Using raw transaction-local context statements in autocommit mode.
+- Giving a runtime role direct internal-table access or promotion authority.
+- Sharing privileged database credentials with an agent-facing process.
+- Enabling unsafe canonical-write compatibility for agent-facing traffic.
+- Exposing arbitrary SQL through `CowSession.native` to an external caller.
+
+The complete public asyncpg example is
+[`asyncpg_safe_session_example.py`](../agentcow/postgres/examples/asyncpg_safe_session_example.py).
+It demonstrates setup, effective-privilege validation, runtime pool use,
+server-owned session resolution, and reviewer-only promotion. Conflict checks
+remain an application responsibility until H06, and the reviewer explicitly
+owns its transaction until H07.
