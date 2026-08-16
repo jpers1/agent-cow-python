@@ -800,6 +800,13 @@ BEGIN
                 END IF;
                 op_id := op_str::uuid;
 
+                PERFORM pg_advisory_xact_lock_shared(
+                    hashtextextended(
+                        'agentcow-session:' || TG_TABLE_SCHEMA || ':' || sess::text,
+                        0
+                    )
+                );
+
                 %s
 
                 INSERT INTO %s (
@@ -865,6 +872,13 @@ BEGIN
                         USING ERRCODE = '22023';
                 END IF;
                 op_id := op_str::uuid;
+
+                PERFORM pg_advisory_xact_lock_shared(
+                    hashtextextended(
+                        'agentcow-session:' || TG_TABLE_SCHEMA || ':' || sess::text,
+                        0
+                    )
+                );
 
                 %s
 
@@ -1597,6 +1611,99 @@ BEGIN
         'SELECT d.table_name || ''_changes'' FROM %I.cow_dirty_tables d WHERE d.schema_name = $1 AND d.session_id = $2',
         p_schema
     ) USING p_schema, p_session_id;
+END;
+$$;
+"""
+
+LOCK_COW_SESSION_SQL = """
+CREATE OR REPLACE FUNCTION agentcow._cow_lock_session(
+    p_schema     text,
+    p_session_id uuid
+)
+RETURNS TABLE(table_name text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $$
+DECLARE
+    tbl          RECORD;
+    base_table   text;
+    lock_targets text := '';
+BEGIN
+    PERFORM agentcow._cow_require_reviewer(p_schema);
+    PERFORM pg_advisory_xact_lock(
+        hashtextextended(
+            'agentcow-session:' || p_schema || ':' || p_session_id::text,
+            0
+        )
+    );
+
+    FOR tbl IN
+        SELECT dirty.table_name
+        FROM agentcow._cow_dirty_changes_tables(p_schema, p_session_id) dirty
+        ORDER BY dirty.table_name
+    LOOP
+        base_table := regexp_replace(tbl.table_name, '_changes$', '_base');
+        PERFORM agentcow._cow_require_cow_table(p_schema, base_table);
+        IF lock_targets <> '' THEN
+            lock_targets := lock_targets || ', ';
+        END IF;
+        lock_targets := lock_targets
+            || format('%I.%I, %I.%I', p_schema, base_table, p_schema, tbl.table_name);
+    END LOOP;
+
+    IF lock_targets <> '' THEN
+        EXECUTE 'LOCK TABLE ' || lock_targets || ' IN SHARE ROW EXCLUSIVE MODE';
+    END IF;
+
+    RETURN QUERY
+    SELECT regexp_replace(dirty.table_name, '_changes$', '')
+    FROM agentcow._cow_dirty_changes_tables(p_schema, p_session_id) dirty
+    ORDER BY dirty.table_name;
+END;
+$$;
+"""
+
+GET_COW_OPERATION_TABLES_SQL = """
+CREATE OR REPLACE FUNCTION agentcow._cow_operation_tables(
+    p_schema        text,
+    p_session_id    uuid,
+    p_operation_ids uuid[]
+)
+RETURNS TABLE(table_name text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $$
+DECLARE
+    tbl         RECORD;
+    has_changes boolean;
+BEGIN
+    PERFORM agentcow._cow_require_reviewer(p_schema);
+
+    IF p_operation_ids IS NULL OR cardinality(p_operation_ids) = 0 THEN
+        RETURN;
+    END IF;
+
+    FOR tbl IN
+        SELECT dirty.table_name
+        FROM agentcow._cow_dirty_changes_tables(p_schema, p_session_id) dirty
+        ORDER BY dirty.table_name
+    LOOP
+        EXECUTE format(
+            'SELECT EXISTS ('
+            'SELECT 1 FROM %I.%I '
+            'WHERE session_id = $1 AND operation_id = ANY($2)'
+            ')',
+            p_schema,
+            tbl.table_name
+        ) INTO has_changes USING p_session_id, p_operation_ids;
+
+        IF has_changes THEN
+            table_name := regexp_replace(tbl.table_name, '_changes$', '');
+            RETURN NEXT;
+        END IF;
+    END LOOP;
 END;
 $$;
 """
